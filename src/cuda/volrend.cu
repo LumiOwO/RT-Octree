@@ -3,6 +3,7 @@
 #include <ctime>
 #include <cstring>
 #include <cuda_fp16.h>
+#include <curand_kernel.h>
 
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/rt_core.cuh"
@@ -82,12 +83,12 @@ __global__ static void render_kernel(
         TreeSpec tree,
         RenderOptions opt,
         float* probe_coeffs,
-        bool offscreen) {
+        bool offscreen,
+        float*  __restrict__  device_arr) {
     CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
     const int x = idx % cam.width, y = idx / cam.width;
-
-    float dir[3], cen[3], out[4];
-
+    const float random_num=device_arr[idx];
+    float dir[3], cen[3], out[4],delta_tmp[2];
     uint8_t rgbx_init[4];
     if (!offscreen) {
         // Read existing values for compositing (with meshes)
@@ -134,6 +135,7 @@ __global__ static void render_kernel(
     }
     if (enable_draw) {
         screen2worlddir(x, y, cam, dir, cen);
+        // out[3]=1.f;
         float vdir[3] = {dir[0], dir[1], dir[2]};
         maybe_world2ndc(tree, dir, cen);
         for (int i = 0; i < 3; ++i) {
@@ -147,6 +149,8 @@ __global__ static void render_kernel(
 
         rodrigues(opt.rot_dirs, vdir);
 
+        // delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out,random_num,delta_tmp);
+        // printf("hit or not:%f\n",delta_tmp[0]);
         trace_ray(tree, dir, vdir, cen, opt, t_max, out);
     }
     // Compositing with existing color
@@ -164,6 +168,7 @@ __global__ static void render_kernel(
 
     // Output pixel color
     uint8_t rgbx[4] = { uint8_t(out[0] * 255), uint8_t(out[1] * 255), uint8_t(out[2] * 255), 255 };
+    // printf("%f, %f, %f, %f:\n",rgbx[0],rgbx[1],rgbx[2]);
     surf2Dwrite(
             *reinterpret_cast<uint32_t*>(rgbx),
             surf_obj,
@@ -196,7 +201,8 @@ __host__ void launch_renderer(const N3Tree& tree,
         const Camera& cam, const RenderOptions& options, cudaArray_t& image_arr,
         cudaArray_t& depth_arr,
         cudaStream_t stream,
-        bool offscreen) {
+        bool offscreen,
+        float* device_arr) {
     cudaSurfaceObject_t surf_obj = 0, surf_obj_depth = 0;
 
     float* probe_coeffs = nullptr;
@@ -237,7 +243,8 @@ __host__ void launch_renderer(const N3Tree& tree,
             tree,
             options,
             probe_coeffs,
-            offscreen);
+            offscreen,
+            device_arr);
 
     if (options.enable_probe) {
         cudaFree(probe_coeffs);

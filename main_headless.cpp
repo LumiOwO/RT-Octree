@@ -4,6 +4,10 @@
 #include <vector>
 #include <fstream>
 #include <iomanip>
+#include <cmath>
+#include<bits/stdc++.h>
+#include <stdint.h>
+#include <iostream>
 
 #include "volrend/internal/auto_filesystem.hpp"
 
@@ -76,6 +80,7 @@ void read_intrins(const std::string &path, float &fx, float &fy) {
 
 int main(int argc, char *argv[]) {
     using namespace volrend;
+
     cxxopts::Options cxxoptions(
         "volrend_headless",
         "Headless PlenOctree volume rendering (c) PlenOctree authors 2021");
@@ -91,7 +96,7 @@ int main(int argc, char *argv[]) {
         ("r,reverse_yz", "use OpenCV camera space convention instead of NeRF",
                 cxxopts::value<bool>())
         ("scale", "scaling to apply to image",
-                cxxopts::value<float>()->default_value("1.0"))
+                cxxopts::value<float>()->default_value("1"))
         ("max_imgs", "max images to render, default no limit",
                 cxxopts::value<int>()->default_value("0"))
         ;
@@ -151,6 +156,14 @@ int main(int argc, char *argv[]) {
     N3Tree tree(args["file"].as<std::string>());
 
     int width = args["width"].as<int>(), height = args["height"].as<int>();
+
+    // 创建随机数生成器
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(0, 1);
+
+
+
     float fx = args["fx"].as<float>();
     if (fx < 0) fx = 1111.11f;
     float fy = args["fy"].as<float>();
@@ -182,6 +195,8 @@ int main(int argc, char *argv[]) {
             basenames.resize(max_imgs);
         }
     }
+    int randomsize=width*height ; // 数组大小
+    float* random_nums=new float[randomsize]; // 随机数数组
 
     Camera camera(width, height, fx, fy);
     cudaArray_t array;
@@ -203,15 +218,22 @@ int main(int argc, char *argv[]) {
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
+    for (int k = 0; k < randomsize; ++k) {
+        random_nums[k] = -log(1-dis(gen));
+        // random_nums[k] = dis(gen);
+    }
+
+    float *device_arr;
+    cudaMalloc(&device_arr, randomsize*sizeof(float));
+    cudaMemcpy(device_arr,random_nums,randomsize*sizeof(float),cudaMemcpyHostToDevice);
 
     cudaEventRecord(start);
     for (size_t i = 0; i < trans.size(); ++i) {
         camera.transform = trans[i];
         camera._update(false);
-
         RenderOptions options = internal::render_options_from_args(args);
 
-        launch_renderer(tree, camera, options, array, depth_arr, stream, true);
+        launch_renderer(tree, camera, options, array, depth_arr, stream, true,device_arr);
 
         if (out_dir.size()) {
             cuda(Memcpy2DFromArrayAsync(buf.data(), 4 * width, array, 0, 0,
@@ -231,5 +253,7 @@ int main(int argc, char *argv[]) {
     printf("%.10f fps\n", 1000.f / milliseconds);
 
     cuda(FreeArray(array));
+    cudaFree(device_arr);
+    delete[] random_nums;
     cuda(StreamDestroy(stream));
 }
