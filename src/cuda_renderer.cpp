@@ -13,6 +13,7 @@
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/renderer_kernel.hpp"
 #include "volrend/internal/imwrite.hpp"
+#include "volrend/pcg32.h"
 
 namespace volrend {
 
@@ -38,6 +39,8 @@ struct VolumeRenderer::Impl {
         probe_.update();
         wire_.face_size = 2;
         wire_.unlit = true;
+
+        rng.seed(20230224);
     }
 
     ~Impl() {
@@ -114,7 +117,7 @@ struct VolumeRenderer::Impl {
         if (tree != nullptr) {
             cuda(GraphicsMapResources(2, &cgr[buf_index * 2], stream));
             launch_renderer(*tree, camera, options, ca[buf_index * 2],
-                            ca[buf_index * 2 + 1], stream);
+                            ca[buf_index * 2 + 1], stream, rng);
             cuda(GraphicsUnmapResources(2, &cgr[buf_index * 2], stream));
         }
 
@@ -208,6 +211,8 @@ struct VolumeRenderer::Impl {
     std::vector<Mesh>& meshes;
     cudaStream_t stream;
     bool started_ = false;
+
+    pcg32 rng;
 };
 
 VolumeRenderer::VolumeRenderer()

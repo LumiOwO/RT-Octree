@@ -3,12 +3,12 @@
 #include <ctime>
 #include <cstring>
 #include <cuda_fp16.h>
-#include <curand_kernel.h>
 
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/rt_core.cuh"
 #include "volrend/render_options.hpp"
 #include "volrend/internal/data_spec.hpp"
+#include "volrend/pcg32.h"
 
 namespace volrend {
 
@@ -83,11 +83,14 @@ __global__ static void render_kernel(
         TreeSpec tree,
         RenderOptions opt,
         float* probe_coeffs,
-        bool offscreen,
-        float*  __restrict__  device_arr) {
+        pcg32 rng,
+        bool offscreen) {
     CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
+    // generate random number
+    rng.advance(idx);
+    const float random_num = -__logf(1.0f - rng.next_float());
+    
     const int x = idx % cam.width, y = idx / cam.width;
-    const float random_num=device_arr[idx];
     float dir[3], cen[3], out[4],delta_tmp[2];
     uint8_t rgbx_init[4];
     if (!offscreen) {
@@ -149,9 +152,9 @@ __global__ static void render_kernel(
 
         rodrigues(opt.rot_dirs, vdir);
 
-        // delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out,random_num,delta_tmp);
+        delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out, random_num, delta_tmp);
         // printf("hit or not:%f\n",delta_tmp[0]);
-        trace_ray(tree, dir, vdir, cen, opt, t_max, out);
+        //trace_ray(tree, dir, vdir, cen, opt, t_max, out);
     }
     // Compositing with existing color
     const float nalpha = 1.f - out[3];
@@ -201,8 +204,8 @@ __host__ void launch_renderer(const N3Tree& tree,
         const Camera& cam, const RenderOptions& options, cudaArray_t& image_arr,
         cudaArray_t& depth_arr,
         cudaStream_t stream,
-        bool offscreen,
-        float* device_arr) {
+        pcg32& rng, 
+        bool offscreen) {
     cudaSurfaceObject_t surf_obj = 0, surf_obj_depth = 0;
 
     float* probe_coeffs = nullptr;
@@ -233,8 +236,7 @@ __host__ void launch_renderer(const N3Tree& tree,
 
     // less threads is weirdly faster for me than 1024
     // Not sure if this scales to a good GPU
-    const int N_CUDA_THREADS = 320;
-
+    const int N_CUDA_THREADS = 512;
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
     device::render_kernel<<<blocks, N_CUDA_THREADS, 0, stream>>>(
             surf_obj,
@@ -243,8 +245,9 @@ __host__ void launch_renderer(const N3Tree& tree,
             tree,
             options,
             probe_coeffs,
-            offscreen,
-            device_arr);
+            rng,
+            offscreen);
+    rng.advance();
 
     if (options.enable_probe) {
         cudaFree(probe_coeffs);

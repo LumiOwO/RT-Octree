@@ -173,6 +173,9 @@ else()
     include_directories(${ZLIB_DIR})
     set( DEPENDENCIES ${DEPENDENCIES} zlibstatic )
 endif()
+include_directories(
+    ${PROJECT_BINARY_DIR}/3rdparty/zlib
+    )
 
 set (_VOLREND_PNG_ "// ")
 if (NOT EMSCRIPTEN)

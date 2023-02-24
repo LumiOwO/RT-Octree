@@ -4,10 +4,16 @@
 #include "volrend/n3tree.hpp"
 #include "volrend/camera.hpp"
 #include "volrend/render_options.hpp"
+#include "volrend/pcg32.h"
+
 
 namespace volrend {
-__host__ void launch_renderer(const N3Tree& tree, const Camera& cam,
+__host__ void launch_renderer(const N3Tree& tree, 
+                              const Camera& cam,
                               const RenderOptions& options,
-                              cudaArray_t& image_arr, cudaArray_t& depth_arr,
-                              cudaStream_t stream, bool offscreen = false, float* device_arr=nullptr);
+                              cudaArray_t& image_arr, 
+                              cudaArray_t& depth_arr,
+                              cudaStream_t stream, 
+                              pcg32& rng,
+                              bool offscreen = false);
 }  // namespace volrend
