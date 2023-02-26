@@ -86,12 +86,9 @@ __global__ static void render_kernel(
         pcg32 rng,
         bool offscreen) {
     CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
-    // generate random number
-    rng.advance(idx);
-    const float random_num = -__logf(1.0f - rng.next_float());
     
     const int x = idx % cam.width, y = idx / cam.width;
-    float dir[3], cen[3], out[4],delta_tmp[2];
+    float dir[3], cen[3], out[4];
     uint8_t rgbx_init[4];
     if (!offscreen) {
         // Read existing values for compositing (with meshes)
@@ -152,9 +149,13 @@ __global__ static void render_kernel(
 
         rodrigues(opt.rot_dirs, vdir);
 
-        delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out, random_num, delta_tmp);
-        // printf("hit or not:%f\n",delta_tmp[0]);
-        //trace_ray(tree, dir, vdir, cen, opt, t_max, out);
+        if (opt.delta_tracking) {
+            rng.advance(idx); // init random number generator
+            const float dst = -__logf(1.0f - rng.next_float());
+            delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out, dst);
+        } else {
+            trace_ray(tree, dir, vdir, cen, opt, t_max, out);
+        }
     }
     // Compositing with existing color
     const float nalpha = 1.f - out[3];

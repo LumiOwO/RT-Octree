@@ -50,6 +50,8 @@ struct RenderOptions {
     bool enable_probe = false;
     float probe[3] = {0.f, 0.f, 1.f};
     int probe_disp_size = 100;
+
+    bool delta_tracking = true;
 };
 
 }  // namespace volrend

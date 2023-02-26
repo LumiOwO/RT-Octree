@@ -207,8 +207,7 @@ __device__ __inline__ void delta_trace_ray(
         RenderOptions opt,
         float tmax_bg,
         scalar_t* __restrict__ out,
-        float random_num,
-        scalar_t* __restrict__ delta_tmp) {
+        const float& dst) {
 
     const float delta_scale = _get_delta_scale(
             tree.scale, /*modifies*/ dir);
@@ -225,8 +224,6 @@ __device__ __inline__ void delta_trace_ray(
 
     if (tmax < 0 || tmin > tmax) {
         // Ray doesn't hit box
-        if (opt.render_depth)
-            out[3] = 1.f;
         return;
     } else {
         scalar_t pos[3], tmp;
@@ -240,32 +237,30 @@ __device__ __inline__ void delta_trace_ray(
             basis_fn[i] = 0.f;
         }
 
-        scalar_t light_intensity = 1.f;
         scalar_t t = tmin;
         scalar_t cube_sz;
-        float src=0;
-        const float dst=random_num;
-        int step=0;
-        delta_tmp[0]=0;
+        float src = 0;
+        //int step = 0;
         while (t < tmax) {
-            step++;
+            //step++;
             pos[0] = cen[0] + t * dir[0];
             pos[1] = cen[1] + t * dir[1];
             pos[2] = cen[2] + t * dir[2];
 
             internal::query_single_from_root(tree, pos, &tree_val, &cube_sz);
 
-            scalar_t att;
             const scalar_t t_subcube = _dda_unit(pos, invdir) /  cube_sz;
             const scalar_t delta_t = t_subcube + opt.step_size;
             if (__half2float(tree_val[tree.data_dim - 1]) > opt.sigma_thresh) {
+                
                 const float delta = delta_t * delta_scale * __half2float(tree_val[tree.data_dim - 1]);
-                att = expf(-delta_t * delta_scale * __half2float(tree_val[tree.data_dim - 1]));
-                const scalar_t weight = light_intensity * (1.f - att);
-                if(src+delta>=dst){
+                if (src + delta >= dst) {
 
                     if (opt.render_depth) {
-                        out[0] += weight * t;
+                        out[0] = t;
+                        out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
+                        out[3] = 1.f;
+                        return;
                     } else {
                         if (tree.data_format.basis_dim >= 0) {
                             int off = 0;
@@ -305,40 +300,23 @@ __device__ __inline__ void delta_trace_ray(
                                             MUL_BASIS_I(2) +
                                             MUL_BASIS_I(3);
                                 }
-                                out[t] = 1.f/ (1.f + expf(-tmp));
+                                out[t] = 1.f / (1.f + expf(-tmp));
                                 off += tree.data_format.basis_dim;
                             }
 #undef MUL_BASIS_I
                         } else {
                             for (int j = 0; j < 3; ++j) {
-                                out[j] += __half2float(tree_val[j]) * weight;
+                                out[j] = __half2float(tree_val[j]);
                             }
                         }
                     }
-                    delta_tmp[0]=1;
+
                     out[3] = 1.f;
                     return;
                 }
-                if (light_intensity < opt.stop_thresh) {
-                    // Almost full opacity, stop
-                    if (opt.render_depth) {
-                        out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
-                    }
-                    scalar_t scale = 1.f / (1.f - light_intensity);
-                    out[0] *= scale; out[1] *= scale; out[2] *= scale;
-                    out[3] = 1.f;
-                    return;
-                }
-                light_intensity *= att;
-                src+=delta;
+                src += delta;
             }
             t += delta_t;
-        }
-        if (opt.render_depth) {
-            out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
-            out[3] = 1.f;
-        } else {
-            out[3] = 1.f - light_intensity;
         }
     }
 }

@@ -228,7 +228,8 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
 #ifdef VOLREND_CUDA
         ImGui::SameLine();
         ImGui::Checkbox("Render Depth", &rend.options.render_depth);
-#endif
+#endif  
+        ImGui::Checkbox("Delta Tracking", &rend.options.delta_tracking);
         if (rend.options.show_grid) {
             ImGui::SliderInt("grid max depth", &rend.options.grid_max_depth, 0,
                              7);
