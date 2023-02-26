@@ -207,7 +207,8 @@ __device__ __inline__ void delta_trace_ray(
         RenderOptions opt,
         float tmax_bg,
         scalar_t* __restrict__ out,
-        const float& dst) {
+        const float& dst,
+        float& depth) {
 
     const float delta_scale = _get_delta_scale(
             tree.scale, /*modifies*/ dir);
@@ -255,7 +256,7 @@ __device__ __inline__ void delta_trace_ray(
                 
                 const float delta = delta_t * delta_scale * __half2float(tree_val[tree.data_dim - 1]);
                 if (src + delta >= dst) {
-
+                    depth = t;
                     if (opt.render_depth) {
                         out[0] = t;
                         out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);

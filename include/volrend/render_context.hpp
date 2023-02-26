@@ -31,6 +31,8 @@ enum {
 
 // Rendering context for delta tracking 
 struct RenderContext {
+    bool has_history = false;
+    
     // rng
     pcg32 rng = pcg32(20230226);
 
@@ -38,9 +40,8 @@ struct RenderContext {
     cudaArray_t data[CTX_ALL_COUNT] = {};
     cudaSurfaceObject_t surface[CTX_ALL_COUNT] = {};
 
-    // camera
+    // prev camera
     internal::CameraSpec prev_cam{};
-    bool has_history = false;
 
 public:
     RenderContext() = default;

@@ -242,6 +242,11 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
         if (ImGui::Button("Clear History")) {
             rend.options.p_ctx->clearHistory();
         }
+        // temporal
+        ImGui::SliderFloat("alpha", &rend.options.alpha, 0.0f, 1.0f);
+        ImGui::Checkbox("clamp", &rend.options.clamp);
+        ImGui::SliderInt("clamp_support", &rend.options.clamp_support, 0, 3);
+        ImGui::SliderFloat("clamp_k", &rend.options.clamp_k, 0.0f, 5.0f);
     }
 
     ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);

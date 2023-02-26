@@ -55,7 +55,12 @@ struct RenderOptions {
     // * Delta tracking options
     RenderContext* p_ctx = nullptr;
     bool delta_tracking = true;
-    // Filter parameters
+    // temporal
+    float alpha = 0.2f;
+    bool clamp = true;
+    int clamp_support = 0;
+    float clamp_k = 3.0f;
+    // spatial
     int filter_iters = 3;
 };
 

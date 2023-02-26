@@ -97,12 +97,12 @@ __host__ __device__ __inline__ static void world2screen(
 
     // camera -> image
     scalar_t c_z_inv = 1.0f / c_z;
-    x = (cam.fx * c_x * c_z_inv + (cam.width >> 1)) - 0.5f;
-    y = (cam.fy * c_y * c_z_inv + (cam.height >> 1)) - 0.5f;
+    x = cam.width - (cam.fx * c_x * c_z_inv + (cam.width * 0.5f));
+    y = (cam.fy * c_y * c_z_inv + (cam.height * 0.5f));
 }
 template<typename scalar_t>
 __host__ __device__ __inline__ scalar_t luminance(const scalar_t* rgb) {
-    scalar_t coe[3] = {0.2126, 0.7152, 0.0722};
+    constexpr static scalar_t coe[3] = {0.2126, 0.7152, 0.0722};
     return _dot3(rgb, coe);
 }
 
@@ -168,6 +168,8 @@ __global__ static void render_kernel(
             out[0] = out[1] = out[2] = 0.f;
         }
     }
+    float t_max = 1e9f;
+    float depth = t_max;
     if (enable_draw) {
         screen2worlddir(x, y, cam, dir, cen);
         // out[3]=1.f;
@@ -177,7 +179,6 @@ __global__ static void render_kernel(
             cen[i] = tree.offset[i] + tree.scale[i] * cen[i];
         }
 
-        float t_max = 1e9f;
         if (!offscreen) {
             surf2Dread(&t_max, surf_obj_depth, x * sizeof(float), y, cudaBoundaryModeZero);
         }
@@ -187,7 +188,7 @@ __global__ static void render_kernel(
         if (opt.delta_tracking) {
             ctx.rng.advance(idx); // init random number generator
             const float dst = -__logf(1.0f - ctx.rng.next_float());
-            delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out, dst);
+            delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out, dst, depth);
         } else {
             trace_ray(tree, dir, vdir, cen, opt, t_max, out);
         }
@@ -228,6 +229,13 @@ __global__ static void render_kernel(
             x * (int)sizeof(float4),
             y,
             cudaBoundaryModeZero); // squelches out-of-bound writes
+        // write depth
+        surf2Dwrite(
+            depth,
+            ctx.surface[PREV_MU_D],
+            x * (int)sizeof(float4) + CTX_CUR_D * (int)sizeof(float),
+            y,
+            cudaBoundaryModeZero); // squelches out-of-bound writes
     }
 }
 
@@ -249,80 +257,126 @@ __global__ static void retrieve_cursor_lumisphere_kernel(
     }
 }
 
+#define READ_CTX(buf, sid, x, y)        \
+    surf2Dread(                         \
+        reinterpret_cast<float4*>(buf), \
+        ctx.surface[sid],               \
+        x * (int)sizeof(float4),        \
+        y,                              \
+        cudaBoundaryModeZero)
+
+#define WRITE_CTX(buf, sid, x, y)       \
+    surf2Dwrite(                        \
+        *reinterpret_cast<float4*>(buf),\
+        ctx.surface[sid],               \
+        x * (int)sizeof(float4),        \
+        y,                              \
+        cudaBoundaryModeZero)
+
 __global__ void temporal_accumulate(
         RenderContext ctx,
         RenderOptions opt,
         CameraSpec cam) {
-    //const uint32_t n = threadIdx.x + blockIdx.x * blockDim.x;
-    //if (n >= N)
-    //    return;
-    //uint32_t n_mul_3 = 3 * n;
+    CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
+    const int x = idx % cam.width, y = idx / cam.width;
 
-    //// default: if no history, use current image
-    //int n_prev = (int)n;
-    //float count = 1;
-    //float alpha = 1.0f;
+    // get pixel information
+    float rgba[4];
+    READ_CTX(rgba, CUR_RGBA, x, y);
+    float mu_d[4];
+    READ_CTX(mu_d, PREV_MU_D, x, y);
 
-    //float x = position[n_mul_3];
-    //float y = position[n_mul_3 + 1];
-    //float z = position[n_mul_3 + 2];
-    //if (same_pose) {
-    //    n_prev = n;
-    //    count = history_count[n_prev] + 1;
-    //    alpha = 1.0f / count;
+    // special case: no history
+    float mu1 = luminance(rgba);
+    float mu2 = mu1 * mu1;
+    if (!ctx.has_history) {
+        mu_d[CTX_MU1] = mu1;
+        mu_d[CTX_MU2] = mu2;
+        WRITE_CTX(mu_d, PREV_MU_D, x, y);
+        return;
+    }
 
-    //}
-    //else {
-    //    // project to previous frame
-    //    // world -> camera
-    //    x -= poses_prev[3];
-    //    y -= poses_prev[7];
-    //    z -= poses_prev[11];
-    //    float v_x = poses_prev[0] * x + poses_prev[4] * y + poses_prev[8] * z;
-    //    float v_y = poses_prev[1] * x + poses_prev[5] * y + poses_prev[9] * z;
-    //    float v_z = poses_prev[2] * x + poses_prev[6] * y + poses_prev[10] * z;
-    //    // camera -> image
-    //    float v_z_inv = 1.0f / v_z;
-    //    float u_prev = (fx * v_x * v_z_inv + cx);
-    //    float v_prev = (fy * v_y * v_z_inv + cy);
-
-    //    // calculate pixel distance
-    //    float u_cur = (n % width) + 0.5f;
-    //    float v_cur = (n / width) + 0.5f;
-    //    float du = u_cur - u_prev;
-    //    float dv = v_cur - v_prev;
-    //    if ((du * du + dv * dv) > 1.0f) {
-    //        n_prev = floorf(v_prev) * width + floorf(u_prev);
-    //    }
-    //    else {
-    //        n_prev = n;
-    //    }
-
-    //    if (n_prev < 0 || n_prev >= N) {
-    //        n_prev = n;
-    //    }
-
-    //    // reset history count
-    //    count = 4;
-    //    // alpha = 1.0f / count;
-    //    alpha = 0.2f;
+    // reprojection
+    float dir[3];
+    float cen[3];
+    screen2worlddir(x, y, cam, dir, cen);
+    float& cur_d = mu_d[CTX_CUR_D];
+    float& prev_d = mu_d[CTX_PREV_D];
+    float world_pos[3];
+    for (int i = 0; i < 3; i++) {
+        world_pos[i] = (cen[i] + cur_d * dir[i]);
+    }
+    float prev_x, prev_y;
+    world2screen(ctx.prev_cam, world_pos, prev_x, prev_y);
+    //if (cur_d < 1e9) {
+    //    printf("%f: %f, %f ## %d, %d\n", cur_d, prev_x, prev_y, x, y);
     //}
 
+    // check
+    float alpha = opt.alpha;
+    int prev_ix = x;
+    int prev_iy = y;
+    float dx = x - prev_x;
+    float dy = y - prev_y;
+    if ((dx * dx + dy * dy) > 1.0f) {
+        prev_ix = roundf(prev_x);
+        prev_iy = roundf(prev_y);
+    }
+    if (prev_ix < 0 || prev_ix >= cam.width || prev_iy < 0 || prev_iy >= cam.height) {
+        prev_ix = x;
+        prev_iy = y;
+        alpha = 1.0f;
+    }
 
+    // clamp
+    float prev_rgba[4];
+    READ_CTX(prev_rgba, PREV_RGBA, prev_ix, prev_iy);
+    if (opt.clamp && alpha < 1.0f) {
+        float mean[4] = {};
+        float sigma[4] = {};
+        float buf[4] = {};
 
-    //// blend
-    //history_count[n] = count;
-    //depth_prev[n] = alpha * depth[n] + (1 - alpha) * depth_prev[n_prev];
+        int support = opt.clamp_support;
+        int cnt = 0;
+        for (int xx = x - support; xx <= x + support; xx++) {
+            if (xx < 0 || xx >= cam.width) continue;
+            for (int yy = y - support; yy <= y + support; yy++) {
+                if (yy < 0 || yy >= cam.height) continue;
+                cnt++;
+                READ_CTX(buf, CUR_RGBA, xx, yy);
+#pragma unroll 4
+                for (int i = 0; i < 4; i++) {
+                    mean[i] += buf[i];
+                    sigma[i] += buf[i] * buf[i];
+                }
+            }
+        }
+        float w = 1.0f / cnt;
+#pragma unroll 4
+        for (int i = 0; i < 4; i++) {
+            mean[i] *= w;
+            sigma[i] *= w;
+            sigma[i] = sqrtf(mean[i] * mean[i] - sigma[i]);
 
-    //uint32_t n_prev_mul_3 = 3 * n_prev;
-    //image_prev[n_mul_3] = alpha * image[n_mul_3] + (1 - alpha) * image_prev[n_prev_mul_3];
-    //image_prev[n_mul_3 + 1] = alpha * image[n_mul_3 + 1] + (1 - alpha) * image_prev[n_prev_mul_3 + 1];
-    //image_prev[n_mul_3 + 2] = alpha * image[n_mul_3 + 2] + (1 - alpha) * image_prev[n_prev_mul_3 + 2];
+            prev_rgba[i] = fminf(
+                fmaxf(prev_rgba[i], mean[i] - opt.clamp_k * sigma[i]),
+                mean[i] + opt.clamp_k * sigma[i]
+            );
+        }
+    }
 
-    //// float c = (float)(n_prev == n);
-    //// image_prev[n_mul_3] = c;
-    //// image_prev[n_mul_3 + 1] = c;
-    //// image_prev[n_mul_3 + 2] = c;
+    // alpha blend
+    const float nalpha = 1.0f - alpha;
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        rgba[i] = rgba[i] * alpha + prev_rgba[i] * nalpha;
+    }
+    cur_d = cur_d * alpha + prev_d * nalpha;
+    
+    // write rgba
+    WRITE_CTX(rgba, CUR_RGBA, x, y);
+    // write moments
+    WRITE_CTX(mu_d, PREV_MU_D, x, y);
 }
 
 
@@ -330,9 +384,10 @@ __global__ void wavelet_filter(
         RenderContext ctx,
         RenderOptions opt,
         int level) {
-    //const uint32_t n = threadIdx.x + blockIdx.x * blockDim.x;
-    //if (n >= N)
-    //    return;
+    const int& width = ctx.prev_cam.width;
+    const int& height = ctx.prev_cam.height;
+    CUDA_GET_THREAD_ID(idx, width * height);
+    const int x = idx % width, y = idx / width;
 
     constexpr static float epsilon = 1e-5f;
     constexpr static float h[25] = {
@@ -439,6 +494,22 @@ __global__ void wavelet_filter(
     //    pImage_ptr[2] = clamp(b / weights, 0.0f, 10.0f);
     //    pVariance_ptr[0] = fminf(fmaxf(v / (weights * weights), 0.0f), 10.0f);
     //}
+
+    if (level > 0) return;
+    // save rgb to prev frame
+    float rgba[4];
+    surf2Dread(
+        reinterpret_cast<float4*>(rgba),
+        ctx.surface[CUR_RGBA],
+        x * (int)sizeof(float4),
+        y,
+        cudaBoundaryModeZero);
+    surf2Dwrite(
+        *reinterpret_cast<float4*>(rgba),
+        ctx.surface[PREV_RGBA],
+        x * (int)sizeof(float4),
+        y,
+        cudaBoundaryModeZero);
 }
 
 __global__ void resultFromContext(
