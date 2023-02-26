@@ -1,6 +1,7 @@
 #pragma once
 
 #include "volrend/common.hpp"
+#include "volrend/render_context.hpp"
 
 // Max global basis
 #define VOLREND_GLOBAL_BASIS_MAX 25
@@ -51,7 +52,11 @@ struct RenderOptions {
     float probe[3] = {0.f, 0.f, 1.f};
     int probe_disp_size = 100;
 
+    // * Delta tracking options
+    RenderContext* p_ctx = nullptr;
     bool delta_tracking = true;
+    // Filter parameters
+    int filter_iters = 3;
 };
 
 }  // namespace volrend

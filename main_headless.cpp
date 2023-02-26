@@ -210,7 +210,8 @@ int main(int argc, char *argv[]) {
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    auto rng = pcg32(20230224);
+    RenderContext ctx;
+    ctx.resize(width, height);
 
     cudaEventRecord(start);
     for (size_t i = 0; i < trans.size(); ++i) {
@@ -218,7 +219,7 @@ int main(int argc, char *argv[]) {
         camera._update(false);
         RenderOptions options = internal::render_options_from_args(args);
 
-        launch_renderer(tree, camera, options, array, depth_arr, stream, rng, true);
+        launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
 
         if (out_dir.size()) {
             cuda(Memcpy2DFromArrayAsync(buf.data(), 4 * width, array, 0, 0,
@@ -239,4 +240,5 @@ int main(int argc, char *argv[]) {
 
     cuda(FreeArray(array));
     cuda(StreamDestroy(stream));
+    ctx.freeResource();
 }

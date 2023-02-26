@@ -9,10 +9,12 @@ namespace internal {
 namespace {
 
 struct CameraSpec {
-    const int width;
-    const int height;
-    const float fx, fy;
-    const float* VOLREND_RESTRICT transform;
+    int width = 0;
+    int height = 0;
+    float fx = 0;
+    float fy = 0;
+    float* VOLREND_RESTRICT transform = nullptr;
+    CameraSpec() = default;
     CameraSpec(const Camera& camera)
         : width(camera.width),
           height(camera.height),

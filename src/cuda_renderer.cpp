@@ -39,8 +39,6 @@ struct VolumeRenderer::Impl {
         probe_.update();
         wire_.face_size = 2;
         wire_.unlit = true;
-
-        rng.seed(20230224);
     }
 
     ~Impl() {
@@ -54,6 +52,7 @@ struct VolumeRenderer::Impl {
         glDeleteRenderbuffers(2, depth_buf_rb.data());
         glDeleteFramebuffers(2, fb.data());
         cuda(StreamDestroy(stream));
+        ctx.freeResource();
     }
 
     void start() {
@@ -80,6 +79,10 @@ struct VolumeRenderer::Impl {
                                           GL_COLOR_ATTACHMENT1};
             glNamedFramebufferDrawBuffers(fb[index], 2, attach_buffers);
         }
+
+        // Register context
+        options.p_ctx = &ctx;
+
         started_ = true;
     }
 
@@ -117,7 +120,7 @@ struct VolumeRenderer::Impl {
         if (tree != nullptr) {
             cuda(GraphicsMapResources(2, &cgr[buf_index * 2], stream));
             launch_renderer(*tree, camera, options, ca[buf_index * 2],
-                            ca[buf_index * 2 + 1], stream, rng);
+                            ca[buf_index * 2 + 1], stream, ctx);
             cuda(GraphicsUnmapResources(2, &cgr[buf_index * 2], stream));
         }
 
@@ -169,6 +172,9 @@ struct VolumeRenderer::Impl {
                                                    0));
         }
         cuda(GraphicsUnmapResources(cgr.size(), cgr.data(), 0));
+
+        // resize delta tracking context
+        ctx.resize(width, height);
     }
 
     void set(N3Tree& tree) {
@@ -212,7 +218,7 @@ struct VolumeRenderer::Impl {
     cudaStream_t stream;
     bool started_ = false;
 
-    pcg32 rng;
+    RenderContext ctx;
 };
 
 VolumeRenderer::VolumeRenderer()

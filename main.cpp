@@ -229,10 +229,18 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
         ImGui::SameLine();
         ImGui::Checkbox("Render Depth", &rend.options.render_depth);
 #endif  
-        ImGui::Checkbox("Delta Tracking", &rend.options.delta_tracking);
         if (rend.options.show_grid) {
             ImGui::SliderInt("grid max depth", &rend.options.grid_max_depth, 0,
                              7);
+        }
+    }
+
+    ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
+    if (ImGui::CollapsingHeader("Delta Tracking")) {
+        ImGui::Checkbox("Enable", &rend.options.delta_tracking);
+        ImGui::SameLine();
+        if (ImGui::Button("Clear History")) {
+            rend.options.p_ctx->clearHistory();
         }
     }
 
