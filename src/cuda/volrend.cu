@@ -188,7 +188,7 @@ __global__ static void render_kernel(
         }
     }
     float t_max = 1e9f;
-    float depth;
+    float depth = 0;
     if (enable_draw) {
         screen2worlddir(x, y, cam, dir, cen);
         // out[3]=1.f;
@@ -204,7 +204,6 @@ __global__ static void render_kernel(
 
         rodrigues(opt.rot_dirs, vdir);
 
-        depth = 0;
         if (opt.delta_tracking) {
             ctx.rng.advance(idx); // init random number generator
             const float dst = -__logf(1.0f - ctx.rng.next_float());
@@ -342,7 +341,6 @@ __global__ void temporal_accumulate(
         float sigma[4] = {};
         float buf[4] = {};
 
-        bool is_bg = true;
         int support = opt.clamp_support;
         int cnt = 0;
         for (int xx = x - support; xx <= x + support; xx++) {
@@ -373,7 +371,6 @@ __global__ void temporal_accumulate(
                 mean[i] - opt.clamp_k * sigma[i],
                 mean[i] + opt.clamp_k * sigma[i]
             );
-            if (mean[i] > 0) is_bg = false;
         }
 
     }
@@ -515,17 +512,25 @@ __host__ void launch_renderer(const N3Tree& tree,
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
 
     bool same_pose = true;
+    // camera compare
     if (options.delta_tracking) {
-        // check camera pose
-        auto&& a = ctx.prev_transform_host;
-        auto&& b = (float*)&cam.transform;
+        if (!ctx.cam_inited) {
+            ctx.recordCamera(cam);
+            ctx.cam_inited = true;
+        } else {
+            // check camera pose
+            auto&& a = ctx.prev_transform_host;
+            auto&& b = (float*)&cam.transform;
 #pragma unroll 12
-        for (int i = 0; i < 12; i++) {
-            if (fabsf(a[i] - b[i]) > 1e-5) {
-                same_pose = false;
-                break;
+            for (int i = 0; i < 12; i++) {
+                if (fabsf(a[i] - b[i]) > 1e-5) {
+                    same_pose = false;
+                    break;
+                }
             }
         }
+        
+        // update frame buffer
         constexpr static int MAX_SPP = 1e6;
         if (same_pose) {
             if (ctx.spp < MAX_SPP) ctx.spp++;
@@ -564,10 +569,7 @@ __host__ void launch_renderer(const N3Tree& tree,
         );
         // record camera
         if (!same_pose) {
-            cuda(Memcpy(ctx.prev_transform_device, cam.device.transform,
-                12 * sizeof(float), cudaMemcpyDeviceToDevice
-            ));
-            *(glm::mat4x3*)ctx.prev_transform_host = cam.transform;
+            ctx.recordCamera(cam);
             if (!ctx.has_history) ctx.has_history = true;
         }
 

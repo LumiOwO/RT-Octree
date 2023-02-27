@@ -1,11 +1,10 @@
 #pragma once
 
-#include <array>
 #include <cuda_runtime.h>
 
 #include "volrend/pcg32.h"
 #include "volrend/cuda/common.cuh"
-#include "volrend/internal/data_spec.hpp"
+#include "volrend/camera.hpp"
 
 namespace volrend {
 
@@ -34,6 +33,7 @@ struct RenderContext {
     // prev camera
     float* VOLREND_RESTRICT prev_transform_device = nullptr;
     float* prev_transform_host = nullptr;
+    bool cam_inited = false;
 
 public:
     RenderContext() = default;
@@ -42,6 +42,19 @@ public:
     void clearHistory() {
         has_history = false;
         spp = 0;
+        cam_inited = false;
+    }
+
+    void recordCamera(const Camera& cam) {
+        size_t&& size = sizeof(float) * 12;
+        // copy device array
+        cuda(Memcpy(prev_transform_device, cam.device.transform,
+            size, cudaMemcpyDeviceToDevice
+        ));
+        // copy host array
+        cuda(Memcpy(prev_transform_host, &cam.transform,
+            size, cudaMemcpyHostToHost
+        ));
     }
 
     void freeResource() {
