@@ -55,13 +55,14 @@ struct RenderOptions {
     // * Delta tracking options
     RenderContext* p_ctx = nullptr;
     bool delta_tracking = true;
-    // temporal
-    float alpha = 0.2f;
+    bool denoise = true;
+    // denoise
     bool clamp = true;
-    int clamp_support = 0;
-    float clamp_k = 3.0f;
-    // spatial
-    int filter_iters = 3;
+    int clamp_support = 2;
+    float clamp_k = 1.0f;
+    float prev_weight = 9;
+    int show_ctx = 4;
+    float depth_diff_thresh = 1.3f;
 };
 
 }  // namespace volrend

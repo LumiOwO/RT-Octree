@@ -147,7 +147,7 @@ struct VolumeRenderer::Impl {
         // resize color buffer
         for (int index = 0; index < 2; index++) {
             // resize rbo
-            glNamedRenderbufferStorage(rb[index], GL_RGBA8, width, height);
+            glNamedRenderbufferStorage(rb[index], GL_RGBA32F, width, height);
             glNamedRenderbufferStorage(depth_rb[index], GL_R32F, width, height);
             glNamedRenderbufferStorage(depth_buf_rb[index],
                                        GL_DEPTH_COMPONENT32F, width, height);

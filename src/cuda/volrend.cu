@@ -100,10 +100,35 @@ __host__ __device__ __inline__ static void world2screen(
     x = cam.width - (cam.fx * c_x * c_z_inv + (cam.width * 0.5f));
     y = (cam.fy * c_y * c_z_inv + (cam.height * 0.5f));
 }
-template<typename scalar_t>
-__host__ __device__ __inline__ scalar_t luminance(const scalar_t* rgb) {
+
+template <typename scalar_t>
+__host__ __device__ __inline__ scalar_t luminance(
+        const scalar_t* rgb) {
     constexpr static scalar_t coe[3] = {0.2126, 0.7152, 0.0722};
     return _dot3(rgb, coe);
+}
+
+__device__ __inline__ void read_rgba_float4(
+        const float* img_arr, float* rgba, int i) {
+    i <<= 2; // i *= 4;
+    rgba[0] = img_arr[i];
+    rgba[1] = img_arr[i + 1];
+    rgba[2] = img_arr[i + 2];
+    rgba[3] = img_arr[i + 3];
+}
+
+__device__ __inline__ void write_rgba_float4(
+        float* img_arr, const float* rgba, int i) {
+    i <<= 2; // i *= 4;
+    img_arr[i] = rgba[0];
+    img_arr[i + 1] = rgba[1];
+    img_arr[i + 2] = rgba[2];
+    img_arr[i + 3] = rgba[3];
+}
+
+__device__ __inline__ float clamp(
+        float x, float min_val, float max_val) {
+    return fminf(fmaxf(x, min_val), max_val);
 }
 
 }  // namespace
@@ -124,13 +149,7 @@ __global__ static void render_kernel(
     
     const int x = idx % cam.width, y = idx / cam.width;
     float dir[3], cen[3], out[4];
-    uint8_t rgbx_init[4];
-    if (!offscreen) {
-        // Read existing values for compositing (with meshes)
-        surf2Dread(reinterpret_cast<uint32_t*>(rgbx_init), surf_obj, x * 4,
-                y, cudaBoundaryModeZero);
-    }
-
+    
     bool enable_draw = tree.N > 0;
     out[0] = out[1] = out[2] = out[3] = 0.f;
     if (opt.enable_probe && y < opt.probe_disp_size + 5 &&
@@ -169,7 +188,7 @@ __global__ static void render_kernel(
         }
     }
     float t_max = 1e9f;
-    float depth = t_max;
+    float depth;
     if (enable_draw) {
         screen2worlddir(x, y, cam, dir, cen);
         // out[3]=1.f;
@@ -185,6 +204,7 @@ __global__ static void render_kernel(
 
         rodrigues(opt.rot_dirs, vdir);
 
+        depth = 0;
         if (opt.delta_tracking) {
             ctx.rng.advance(idx); // init random number generator
             const float dst = -__logf(1.0f - ctx.rng.next_float());
@@ -195,6 +215,17 @@ __global__ static void render_kernel(
     }
 
     if (!opt.delta_tracking) {
+        float rgbx_init[4];
+        if (!offscreen) {
+            // Read existing values for compositing (with meshes)
+            surf2Dread(
+                reinterpret_cast<float4*>(rgbx_init), 
+                surf_obj, 
+                x * (int)sizeof(float4),
+                y, 
+                cudaBoundaryModeZero);
+        }
+
         // Compositing with existing color
         const float nalpha = 1.f - out[3];
         if (offscreen) {
@@ -203,39 +234,36 @@ __global__ static void render_kernel(
             out[1] += remain;
             out[2] += remain;
         } else {
-            out[0] += rgbx_init[0] / 255.f * nalpha;
-            out[1] += rgbx_init[1] / 255.f * nalpha;
-            out[2] += rgbx_init[2] / 255.f * nalpha;
+            out[0] += rgbx_init[0] * nalpha;
+            out[1] += rgbx_init[1] * nalpha;
+            out[2] += rgbx_init[2] * nalpha;
         }
 
         // Output pixel color
-        uint8_t rgbx[4] = {
-            uint8_t(out[0] * 255),
-            uint8_t(out[1] * 255),
-            uint8_t(out[2] * 255),
-            255
+        float rgbx[4] = {
+            out[0],
+            out[1],
+            out[2],
+            1.0f
         };
         surf2Dwrite(
-            *reinterpret_cast<uint32_t*>(rgbx),
+            *reinterpret_cast<float4*>(rgbx),
             surf_obj,
-            x * (int)sizeof(uint32_t),
+            x * (int)sizeof(float4),
             y,
             cudaBoundaryModeZero); // squelches out-of-bound writes
     } else {
         // write float colors into delta tracking context
-        surf2Dwrite(
-            *reinterpret_cast<float4*>(out),
-            ctx.surface[CUR_RGBA],
-            x * (int)sizeof(float4),
-            y,
-            cudaBoundaryModeZero); // squelches out-of-bound writes
-        // write depth
-        surf2Dwrite(
-            depth,
-            ctx.surface[PREV_MU_D],
-            x * (int)sizeof(float4) + CTX_CUR_D * (int)sizeof(float),
-            y,
-            cudaBoundaryModeZero); // squelches out-of-bound writes
+        float&& alpha = 1.0f / ctx.spp;
+        float&& n_alpha = 1.0f - alpha;
+        float* dst = &ctx.data[CUR_RGBA][idx << 2];
+        dst[0] = out[0] * alpha + dst[0] * n_alpha;
+        dst[1] = out[1] * alpha + dst[1] * n_alpha;
+        dst[2] = out[2] * alpha + dst[2] * n_alpha;
+        dst[3] = out[3] * alpha + dst[3] * n_alpha;
+
+        float& dst_d = ctx.data[CUR_D][idx];
+        dst_d = depth * alpha + dst_d * n_alpha;
     }
 }
 
@@ -257,63 +285,41 @@ __global__ static void retrieve_cursor_lumisphere_kernel(
     }
 }
 
-#define READ_CTX(buf, sid, x, y)        \
-    surf2Dread(                         \
-        reinterpret_cast<float4*>(buf), \
-        ctx.surface[sid],               \
-        x * (int)sizeof(float4),        \
-        y,                              \
-        cudaBoundaryModeZero)
-
-#define WRITE_CTX(buf, sid, x, y)       \
-    surf2Dwrite(                        \
-        *reinterpret_cast<float4*>(buf),\
-        ctx.surface[sid],               \
-        x * (int)sizeof(float4),        \
-        y,                              \
-        cudaBoundaryModeZero)
-
 __global__ void temporal_accumulate(
+        cudaSurfaceObject_t surf_obj,
+        cudaSurfaceObject_t surf_obj_depth,
+        CameraSpec cam,
         RenderContext ctx,
         RenderOptions opt,
-        CameraSpec cam) {
+        bool offscreen) {
     CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
     const int x = idx % cam.width, y = idx / cam.width;
 
     // get pixel information
     float rgba[4];
-    READ_CTX(rgba, CUR_RGBA, x, y);
-    float mu_d[4];
-    READ_CTX(mu_d, PREV_MU_D, x, y);
-
-    // special case: no history
-    float mu1 = luminance(rgba);
-    float mu2 = mu1 * mu1;
-    if (!ctx.has_history) {
-        mu_d[CTX_MU1] = mu1;
-        mu_d[CTX_MU2] = mu2;
-        WRITE_CTX(mu_d, PREV_MU_D, x, y);
-        return;
+    read_rgba_float4(ctx.data[CUR_RGBA], rgba, idx);
+    // special case
+    if (!opt.denoise || !ctx.has_history) {
+        goto output;
     }
+    
 
     // reprojection
     float dir[3];
     float cen[3];
     screen2worlddir(x, y, cam, dir, cen);
-    float& cur_d = mu_d[CTX_CUR_D];
-    float& prev_d = mu_d[CTX_PREV_D];
+    float cur_d = ctx.data[CUR_D][idx];
     float world_pos[3];
     for (int i = 0; i < 3; i++) {
         world_pos[i] = (cen[i] + cur_d * dir[i]);
     }
     float prev_x, prev_y;
-    world2screen(ctx.prev_cam, world_pos, prev_x, prev_y);
-    //if (cur_d < 1e9) {
-    //    printf("%f: %f, %f ## %d, %d\n", cur_d, prev_x, prev_y, x, y);
-    //}
+    CameraSpec prev_cam = cam;
+    prev_cam.transform = ctx.prev_transform_device;
+    world2screen(prev_cam, world_pos, prev_x, prev_y);
 
     // check
-    float alpha = opt.alpha;
+    float alpha = ctx.spp / (ctx.spp + opt.prev_weight);
     int prev_ix = x;
     int prev_iy = y;
     float dx = x - prev_x;
@@ -326,24 +332,26 @@ __global__ void temporal_accumulate(
         prev_ix = x;
         prev_iy = y;
         alpha = 1.0f;
-    }
+    } 
 
     // clamp
     float prev_rgba[4];
-    READ_CTX(prev_rgba, PREV_RGBA, prev_ix, prev_iy);
+    read_rgba_float4(ctx.data[PREV_RGBA], prev_rgba, prev_iy * cam.width + prev_ix);
     if (opt.clamp && alpha < 1.0f) {
         float mean[4] = {};
         float sigma[4] = {};
         float buf[4] = {};
 
+        bool is_bg = true;
         int support = opt.clamp_support;
         int cnt = 0;
         for (int xx = x - support; xx <= x + support; xx++) {
             if (xx < 0 || xx >= cam.width) continue;
-            for (int yy = y - support; yy <= y + support; yy++) {
+            int i = idx + xx - x - support * cam.width;
+            for (int yy = y - support; yy <= y + support; yy++, i += cam.width) {
                 if (yy < 0 || yy >= cam.height) continue;
                 cnt++;
-                READ_CTX(buf, CUR_RGBA, xx, yy);
+                read_rgba_float4(ctx.data[CUR_RGBA], buf, i);
 #pragma unroll 4
                 for (int i = 0; i < 4; i++) {
                     mean[i] += buf[i];
@@ -356,14 +364,25 @@ __global__ void temporal_accumulate(
         for (int i = 0; i < 4; i++) {
             mean[i] *= w;
             sigma[i] *= w;
-            sigma[i] = sqrtf(mean[i] * mean[i] - sigma[i]);
+            float ta = sigma[i];
+            float tb = mean[i] * mean[i];
+            sigma[i] = sqrtf(sigma[i] - mean[i] * mean[i] + 1e-5);
 
-            prev_rgba[i] = fminf(
-                fmaxf(prev_rgba[i], mean[i] - opt.clamp_k * sigma[i]),
+            prev_rgba[i] = clamp(
+                prev_rgba[i], 
+                mean[i] - opt.clamp_k * sigma[i],
                 mean[i] + opt.clamp_k * sigma[i]
             );
+            if (mean[i] > 0) is_bg = false;
         }
+
     }
+    // remove leaked camera ray
+    float prev_d = ctx.data[PREV_D][idx];
+    if (fabsf(prev_d - cur_d) > opt.depth_diff_thresh) {
+        alpha = 0.f;
+    }
+    
 
     // alpha blend
     const float nalpha = 1.0f - alpha;
@@ -371,203 +390,87 @@ __global__ void temporal_accumulate(
     for (int i = 0; i < 4; i++) {
         rgba[i] = rgba[i] * alpha + prev_rgba[i] * nalpha;
     }
-    cur_d = cur_d * alpha + prev_d * nalpha;
     
-    // write rgba
-    WRITE_CTX(rgba, CUR_RGBA, x, y);
-    // write moments
-    WRITE_CTX(mu_d, PREV_MU_D, x, y);
-}
+output:
+    float out[4];
+    if (opt.show_ctx == CUR_RGBA) {
+        read_rgba_float4(ctx.data[CUR_RGBA], out, idx);
+    } else if (opt.show_ctx == PREV_RGBA) {
+        read_rgba_float4(ctx.data[PREV_RGBA], out, idx);
+    } else if (opt.show_ctx == CUR_D) {
+        out[0] = out[1] = out[2] = fminf(ctx.data[CUR_D][idx] * 0.3f, 1.0f);
+        out[3] = 1.0f;
+    } else if (opt.show_ctx == PREV_D) {
+        out[0] = out[1] = out[2] = fminf(ctx.data[PREV_D][idx] * 0.3f, 1.0f);
+        out[3] = 1.0f;
+    } else {
+        out[0] = rgba[0];
+        out[1] = rgba[1];
+        out[2] = rgba[2];
+        out[3] = rgba[3];
+    }
 
-
-__global__ void wavelet_filter(
-        RenderContext ctx,
-        RenderOptions opt,
-        int level) {
-    const int& width = ctx.prev_cam.width;
-    const int& height = ctx.prev_cam.height;
-    CUDA_GET_THREAD_ID(idx, width * height);
-    const int x = idx % width, y = idx / width;
-
-    constexpr static float epsilon = 1e-5f;
-    constexpr static float h[25] = {
-        1.0 / 256.0, 1.0 / 64.0, 3.0 / 128.0, 1.0 / 64.0, 1.0 / 256.0,
-        1.0 / 64.0, 1.0 / 16.0, 3.0 / 32.0, 1.0 / 16.0, 1.0 / 64.0,
-        3.0 / 128.0, 3.0 / 32.0, 9.0 / 64.0, 3.0 / 32.0, 3.0 / 128.0,
-        1.0 / 64.0, 1.0 / 16.0, 3.0 / 32.0, 1.0 / 16.0, 1.0 / 64.0,
-        1.0 / 256.0, 1.0 / 64.0, 3.0 / 128.0, 1.0 / 64.0, 1.0 / 256.0 };
-    constexpr static float gaussianKernel[9] = {
-        1.0 / 16.0, 1.0 / 8.0, 1.0 / 16.0,
-        1.0 / 8.0, 1.0 / 4.0, 1.0 / 8.0,
-        1.0 / 16.0, 1.0 / 8.0, 1.0 / 16.0 };
-
-    // locate
-    // const int x = n % width;
-    // const int y = n / width;
-    //scalar_t* pImage_ptr = image + n * 3;
-    //scalar_t* pVariance_ptr = variance + n;
-    //const scalar_t* pPosition_ptr = position + n * 3;
-    //const scalar_t* pDensity_ptr = density + n;
-
-    //const float pLuminance = pImage_ptr[0] * 0.2126f + pImage_ptr[1] * 0.7152f + pImage_ptr[2] * 0.0722f;
-    //const float pVariance = pVariance_ptr[0];
-    //const float pPosition_x = pPosition_ptr[0];
-    //const float pPosition_y = pPosition_ptr[1];
-    //const float pPosition_z = pPosition_ptr[2];
-    //const float pDensity = pDensity_ptr[0];
-
-    //// filter variance
-    //int delta_locs[9] = {
-    //    -width - 1, -width, -width + 1,
-    //    -1, 0, 1,
-    //    width - 1, width, width + 1,
-    //};
-    //float gaussian_sum = 0.0f;
-    //float gaussian_sumw = 0.0f;
-    //for (int i = 0; i < 9; i++) {
-    //    int loc = (int)n + delta_locs[i];
-    //    if (loc < 0 || loc >= N) continue;
-    //    gaussian_sum += gaussianKernel[i] * variance[loc];
-    //    gaussian_sumw += gaussianKernel[i];
-    //}
-    //float gaussian_v = gaussian_sumw > epsilon ? gaussian_sum / gaussian_sumw
-    //    : 0;
-    //const int x_step = 1 << level;
-    //const int y_step = x_step * width;
-    //const int northwest = (int)n - support * (x_step + y_step);
-    //float r = 0.0f;
-    //float g = 0.0f;
-    //float b = 0.0f;
-    //float v = 0.0f;
-    //float weights = 0.0f;
-    //float weight_squares = 0.0f;
-
-    //for (int offsety = -support; offsety <= support; offsety++)
-    //{
-    //    int loc = northwest + (offsety - support) * y_step;
-    //    for (int offsetx = -support; offsetx <= support; offsetx++, loc += x_step) {
-    //        if (loc < 0 || loc >= N)
-    //            continue;
-
-    //        // locate
-    //        const scalar_t* qImage_ptr = image + loc * 3;
-    //        const scalar_t* qVariance_ptr = variance + loc;
-    //        const scalar_t* qPosition_ptr = position + loc * 3;
-    //        const scalar_t* qDensity_ptr = density + loc;
-
-    //        const float qLuminance = qImage_ptr[0] * 0.2126f + qImage_ptr[1] * 0.7152f + qImage_ptr[2] * 0.0722f;
-    //        const float qVariance = qVariance_ptr[0];
-    //        const float qPosition_x = qPosition_ptr[0];
-    //        const float qPosition_y = qPosition_ptr[1];
-    //        const float qPosition_z = qPosition_ptr[2];
-    //        const float qDensity = qDensity_ptr[0];
-
-    //        float t_x = pPosition_x - qPosition_x;
-    //        float t_y = pPosition_y - qPosition_y;
-    //        float t_z = pPosition_z - qPosition_z;
-    //        float dist_p = t_x * t_x + t_y * t_y + t_z * t_z;
-    //        float wp = fminf(__expf(-dist_p / (kp + epsilon)), 1.0f);
-
-    //        float dist_d = fabsf(pDensity - qDensity);
-    //        float wd = fminf(__expf(-dist_d / (kd + epsilon)), 1.0f);
-
-    //        float dist_l = fabsf(pLuminance - qLuminance);
-    //        float wl = fminf(__expf(-dist_l / (kl * sqrtf(gaussian_v) + epsilon)), 1.0f);
-
-    //        float w = wp * wd * wl;
-    //        float weight = h[5 * (offsety + support) + offsetx + support] * w;
-
-    //        float weight_square = weight * weight;
-    //        weights += weight;
-    //        weight_squares += weight_square;
-    //        r += weight * qImage_ptr[0];
-    //        g += weight * qImage_ptr[1];
-    //        b += weight * qImage_ptr[2];
-    //        v += weight_square * qVariance;
-    //    }
-    //}
-
-    //if (weights > epsilon)
-    //{
-    //    pImage_ptr[0] = clamp(r / weights, 0.0f, 10.0f);
-    //    pImage_ptr[1] = clamp(g / weights, 0.0f, 10.0f);
-    //    pImage_ptr[2] = clamp(b / weights, 0.0f, 10.0f);
-    //    pVariance_ptr[0] = fminf(fmaxf(v / (weights * weights), 0.0f), 10.0f);
-    //}
-
-    if (level > 0) return;
-    // save rgb to prev frame
-    float rgba[4];
-    surf2Dread(
-        reinterpret_cast<float4*>(rgba),
-        ctx.surface[CUR_RGBA],
-        x * (int)sizeof(float4),
-        y,
-        cudaBoundaryModeZero);
-    surf2Dwrite(
-        *reinterpret_cast<float4*>(rgba),
-        ctx.surface[PREV_RGBA],
-        x * (int)sizeof(float4),
-        y,
-        cudaBoundaryModeZero);
-}
-
-__global__ void resultFromContext(
-        cudaSurfaceObject_t surf_obj,
-        cudaSurfaceObject_t surf_obj_depth,
-        RenderContext ctx,
-        RenderOptions opt,
-        bool offscreen) {
-    const int& width = ctx.prev_cam.width;
-    const int& height = ctx.prev_cam.height;
-    CUDA_GET_THREAD_ID(idx, width * height);
-    const int x = idx % width, y = idx / width;
-
-    uint8_t rgbx_init[4];
+    float rgbx_init[4];
     if (!offscreen) {
         // Read existing values for compositing (with meshes)
         surf2Dread(
-            reinterpret_cast<uint32_t*>(rgbx_init), 
-            surf_obj, 
-            x * (int)sizeof(uint32_t),
-            y, 
+            reinterpret_cast<float4*>(rgbx_init),
+            surf_obj,
+            x * (int)sizeof(float4),
+            y,
             cudaBoundaryModeZero);
     }
-
     // Compositing with existing color
-    float out[4];
-    surf2Dread(
-        reinterpret_cast<float4*>(out),
-        ctx.surface[CUR_RGBA], 
-        x * (int)sizeof(float4),
-        y, 
-        cudaBoundaryModeZero);
-    const float nalpha = 1.f - out[3];
+    const float bg_alpha = 1.f - out[3];
     if (offscreen) {
-        const float remain = opt.background_brightness * nalpha;
+        const float remain = opt.background_brightness * bg_alpha;
         out[0] += remain;
         out[1] += remain;
         out[2] += remain;
-    }
-    else {
-        out[0] += rgbx_init[0] / 255.f * nalpha;
-        out[1] += rgbx_init[1] / 255.f * nalpha;
-        out[2] += rgbx_init[2] / 255.f * nalpha;
+    } else {
+        out[0] += rgbx_init[0] * bg_alpha;
+        out[1] += rgbx_init[1] * bg_alpha;
+        out[2] += rgbx_init[2] * bg_alpha;
     }
 
     // Output pixel color
-    uint8_t rgbx[4] = {
-        uint8_t(out[0] * 255),
-        uint8_t(out[1] * 255),
-        uint8_t(out[2] * 255),
-        255
+    float rgbx[4] = {
+        out[0],
+        out[1],
+        out[2],
+        1.0f
     };
     surf2Dwrite(
-        *reinterpret_cast<uint32_t*>(rgbx),
+        *reinterpret_cast<float4*>(rgbx),
         surf_obj,
-        x * (int)sizeof(uint32_t),
+        x * (int)sizeof(float4),
         y,
         cudaBoundaryModeZero); // squelches out-of-bound writes
+}
+
+
+__global__ void update_prev_frame(
+        RenderContext ctx,
+        RenderOptions opt,
+        CameraSpec cam) {
+    const int& width = cam.width;
+    const int& height = cam.height;
+    CUDA_GET_THREAD_ID(idx, width * height);
+    const int x = idx % width, y = idx / width;
+
+    // save rgba to prev frame
+    float rgba[4];
+    read_rgba_float4(ctx.data[CUR_RGBA], rgba, idx);
+    float&& alpha = ctx.spp / (ctx.spp + opt.prev_weight);
+    float&& n_alpha = 1.0f - alpha;
+    float* dst = &ctx.data[PREV_RGBA][idx << 2];
+    dst[0] = rgba[0] * alpha + dst[0] * n_alpha;
+    dst[1] = rgba[1] * alpha + dst[1] * n_alpha;
+    dst[2] = rgba[2] * alpha + dst[2] * n_alpha;
+    dst[3] = rgba[3] * alpha + dst[3] * n_alpha;
+
+    float& dst_d = ctx.data[PREV_D][idx];
+    dst_d = ctx.data[CUR_D][idx] * alpha + dst_d * n_alpha;
 }
 
 }  // namespace device
@@ -605,14 +508,39 @@ __host__ void launch_renderer(const N3Tree& tree,
             cudaCreateSurfaceObject(&surf_obj_depth, &res_desc);
         }
     }
-    if (options.delta_tracking) {
-        ctx.createSurfaceObjects();
-    }
 
     // less threads is weirdly faster for me than 1024
     // Not sure if this scales to a good GPU
     const int N_CUDA_THREADS = 512;
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
+
+    bool same_pose = true;
+    if (options.delta_tracking) {
+        // check camera pose
+        auto&& a = ctx.prev_transform_host;
+        auto&& b = (float*)&cam.transform;
+#pragma unroll 12
+        for (int i = 0; i < 12; i++) {
+            if (fabsf(a[i] - b[i]) > 1e-5) {
+                same_pose = false;
+                break;
+            }
+        }
+        constexpr static int MAX_SPP = 1e6;
+        if (same_pose) {
+            if (ctx.spp < MAX_SPP) ctx.spp++;
+        } else {
+            // copy current frame to previous buffer
+            device::update_prev_frame<<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                ctx,
+                options,
+                cam
+            );
+            ctx.spp = 1;
+        }
+    }
+
+    // render
     device::render_kernel<<<blocks, N_CUDA_THREADS, 0, stream>>>(
             surf_obj,
             surf_obj_depth,
@@ -623,48 +551,28 @@ __host__ void launch_renderer(const N3Tree& tree,
             ctx,
             offscreen
     );
-    if (options.delta_tracking) {
-        // ===== denoise =====
-        // temporal 
-        device::temporal_accumulate<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-            ctx,
-            options,
-            cam
-        );
-        // record camera
-        if (!ctx.has_history) {
-            ctx.prev_cam.width = cam.width;
-            ctx.prev_cam.height = cam.height;
-            ctx.prev_cam.fx = cam.fx;
-            ctx.prev_cam.fy = cam.fy;
-        }
-        cuda(Memcpy(ctx.prev_cam.transform, cam.device.transform,
-            12 * sizeof(float), cudaMemcpyDeviceToDevice
-        ));
-        
-        // spatial
-        for (int level = 0; level < options.filter_iters; level++) {
-            device::wavelet_filter<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                ctx,
-                options,
-                level
-            );
-        }
 
-        // convert float rgb image to uint32_t rgb image
-        device::resultFromContext<<<blocks, N_CUDA_THREADS, 0, stream>>>(
+    if (options.delta_tracking) {
+        // temporal denoise
+        device::temporal_accumulate<<<blocks, N_CUDA_THREADS, 0, stream>>>(
             surf_obj,
             surf_obj_depth,
+            cam,
             ctx,
             options,
-            offscreen
+            image_arr
         );
-
-        // update context
-        ctx.rng.advance();
-        if (!ctx.has_history) {
-            ctx.has_history = true;
+        // record camera
+        if (!same_pose) {
+            cuda(Memcpy(ctx.prev_transform_device, cam.device.transform,
+                12 * sizeof(float), cudaMemcpyDeviceToDevice
+            ));
+            *(glm::mat4x3*)ctx.prev_transform_host = cam.transform;
+            if (!ctx.has_history) ctx.has_history = true;
         }
+
+        // update rng
+        ctx.rng.advance();
     }
 
     if (options.enable_probe) {

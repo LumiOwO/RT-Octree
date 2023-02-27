@@ -196,7 +196,7 @@ int main(int argc, char *argv[]) {
     cudaChannelFormatDesc channelDesc =
         cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
 
-    std::vector<uint8_t> buf;
+    std::vector<float> buf;
     if (out_dir.size()) {
         std::filesystem::create_directories(out_dir);
         buf.resize(4 * width * height);
@@ -214,6 +214,7 @@ int main(int argc, char *argv[]) {
     ctx.resize(width, height);
 
     cudaEventRecord(start);
+    
     for (size_t i = 0; i < trans.size(); ++i) {
         camera.transform = trans[i];
         camera._update(false);
@@ -225,8 +226,12 @@ int main(int argc, char *argv[]) {
             cuda(Memcpy2DFromArrayAsync(buf.data(), 4 * width, array, 0, 0,
                                         4 * width, height,
                                         cudaMemcpyDeviceToHost, stream));
+            auto buf_uint8 = std::vector<uint8_t>();
+            for (int i = 0; i < buf.size(); i++) {
+                buf_uint8.emplace_back(buf[i] * 255);
+            }
             std::string fpath = out_dir + "/" + basenames[i] + ".png";
-            internal::write_png_file(fpath, buf.data(), width, height);
+            internal::write_png_file(fpath, buf_uint8.data(), width, height);
         }
     }
     cudaEventRecord(stop);

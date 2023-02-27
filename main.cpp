@@ -239,14 +239,18 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
     if (ImGui::CollapsingHeader("Delta Tracking")) {
         ImGui::Checkbox("Enable", &rend.options.delta_tracking);
         ImGui::SameLine();
+        ImGui::Checkbox("Denoise", &rend.options.denoise);
+        ImGui::SameLine();
         if (ImGui::Button("Clear History")) {
             rend.options.p_ctx->clearHistory();
         }
         // temporal
-        ImGui::SliderFloat("alpha", &rend.options.alpha, 0.0f, 1.0f);
-        ImGui::Checkbox("clamp", &rend.options.clamp);
-        ImGui::SliderInt("clamp_support", &rend.options.clamp_support, 0, 3);
-        ImGui::SliderFloat("clamp_k", &rend.options.clamp_k, 0.0f, 5.0f);
+        ImGui::Checkbox("Clamp", &rend.options.clamp);
+        ImGui::SliderInt("Support", &rend.options.clamp_support, 0, 3);
+        ImGui::SliderFloat("Range", &rend.options.clamp_k, 0.0f, 5.0f);
+        ImGui::SliderFloat("Prev Weight", &rend.options.prev_weight, 0, 30);
+        ImGui::SliderInt("Context Buffer", &rend.options.show_ctx, 0, 4);
+        ImGui::SliderFloat("Depth Diff Thresh", &rend.options.depth_diff_thresh, 0, 2);
     }
 
     ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
