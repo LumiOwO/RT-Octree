@@ -194,7 +194,7 @@ int main(int argc, char *argv[]) {
     cudaStream_t stream;
 
     cudaChannelFormatDesc channelDesc =
-        cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
+        cudaCreateChannelDesc<float4>();
 
     std::vector<float> buf;
     if (out_dir.size()) {
@@ -210,25 +210,34 @@ int main(int argc, char *argv[]) {
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
+    RenderOptions options = internal::render_options_from_args(args);
     RenderContext ctx;
     ctx.resize(width, height);
 
+    // warm up
+    ctx.clearHistory();
+    camera.transform = trans[0];
+    camera._update(false);
+    for (size_t i = 0; i < 1024; ++i) {
+        launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
+    }
+
+    // options.show_ctx = 0;
+
+    // render poses
     cudaEventRecord(start);
-    
     for (size_t i = 0; i < trans.size(); ++i) {
         camera.transform = trans[i];
         camera._update(false);
-        RenderOptions options = internal::render_options_from_args(args);
 
         launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-
         if (out_dir.size()) {
-            cuda(Memcpy2DFromArrayAsync(buf.data(), 4 * width, array, 0, 0,
-                                        4 * width, height,
+            cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
+                                        sizeof(float4) * width, height,
                                         cudaMemcpyDeviceToHost, stream));
-            auto buf_uint8 = std::vector<uint8_t>();
-            for (int i = 0; i < buf.size(); i++) {
-                buf_uint8.emplace_back(buf[i] * 255);
+            auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
+            for (int j = 0; j < buf.size(); j++) {
+                buf_uint8[j] = buf[j] * 255;
             }
             std::string fpath = out_dir + "/" + basenames[i] + ".png";
             internal::write_png_file(fpath, buf_uint8.data(), width, height);

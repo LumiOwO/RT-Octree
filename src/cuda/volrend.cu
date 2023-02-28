@@ -297,98 +297,94 @@ __global__ void temporal_accumulate(
     // get pixel information
     float rgba[4];
     read_rgba_float4(ctx.data[CUR_RGBA], rgba, idx);
-    // special case
     if (!opt.denoise || !ctx.has_history) {
-        goto output;
-    }
-    
+        ; // do nothing
+    } else {
+        // reprojection
+        float dir[3];
+        float cen[3];
+        screen2worlddir(x, y, cam, dir, cen);
+        float cur_d = ctx.data[CUR_D][idx];
+        float world_pos[3];
+        for (int i = 0; i < 3; i++) {
+            world_pos[i] = (cen[i] + cur_d * dir[i]);
+        }
+        float prev_x, prev_y;
+        CameraSpec prev_cam = cam;
+        prev_cam.transform = ctx.prev_transform_device;
+        world2screen(prev_cam, world_pos, prev_x, prev_y);
 
-    // reprojection
-    float dir[3];
-    float cen[3];
-    screen2worlddir(x, y, cam, dir, cen);
-    float cur_d = ctx.data[CUR_D][idx];
-    float world_pos[3];
-    for (int i = 0; i < 3; i++) {
-        world_pos[i] = (cen[i] + cur_d * dir[i]);
-    }
-    float prev_x, prev_y;
-    CameraSpec prev_cam = cam;
-    prev_cam.transform = ctx.prev_transform_device;
-    world2screen(prev_cam, world_pos, prev_x, prev_y);
+        // check
+        float alpha = ctx.spp / (ctx.spp + opt.prev_weight);
+        int prev_ix = x;
+        int prev_iy = y;
+        float dx = x - prev_x;
+        float dy = y - prev_y;
+        if ((dx * dx + dy * dy) > 1.0f) {
+            prev_ix = roundf(prev_x);
+            prev_iy = roundf(prev_y);
+        }
+        if (prev_ix < 0 || prev_ix >= cam.width || prev_iy < 0 || prev_iy >= cam.height) {
+            prev_ix = x;
+            prev_iy = y;
+            alpha = 1.0f;
+        }
 
-    // check
-    float alpha = ctx.spp / (ctx.spp + opt.prev_weight);
-    int prev_ix = x;
-    int prev_iy = y;
-    float dx = x - prev_x;
-    float dy = y - prev_y;
-    if ((dx * dx + dy * dy) > 1.0f) {
-        prev_ix = roundf(prev_x);
-        prev_iy = roundf(prev_y);
-    }
-    if (prev_ix < 0 || prev_ix >= cam.width || prev_iy < 0 || prev_iy >= cam.height) {
-        prev_ix = x;
-        prev_iy = y;
-        alpha = 1.0f;
-    } 
+        // clamp
+        float prev_rgba[4];
+        read_rgba_float4(ctx.data[PREV_RGBA], prev_rgba, prev_iy * cam.width + prev_ix);
+        if (opt.clamp && alpha < 1.0f) {
+            float mean[4] = {};
+            float sigma[4] = {};
+            float buf[4] = {};
 
-    // clamp
-    float prev_rgba[4];
-    read_rgba_float4(ctx.data[PREV_RGBA], prev_rgba, prev_iy * cam.width + prev_ix);
-    if (opt.clamp && alpha < 1.0f) {
-        float mean[4] = {};
-        float sigma[4] = {};
-        float buf[4] = {};
-
-        int support = opt.clamp_support;
-        int cnt = 0;
-        for (int xx = x - support; xx <= x + support; xx++) {
-            if (xx < 0 || xx >= cam.width) continue;
-            int i = idx + xx - x - support * cam.width;
-            for (int yy = y - support; yy <= y + support; yy++, i += cam.width) {
-                if (yy < 0 || yy >= cam.height) continue;
-                cnt++;
-                read_rgba_float4(ctx.data[CUR_RGBA], buf, i);
+            int support = opt.clamp_support;
+            int cnt = 0;
+            for (int xx = x - support; xx <= x + support; xx++) {
+                if (xx < 0 || xx >= cam.width) continue;
+                int i = idx + xx - x - support * cam.width;
+                for (int yy = y - support; yy <= y + support; yy++, i += cam.width) {
+                    if (yy < 0 || yy >= cam.height) continue;
+                    cnt++;
+                    read_rgba_float4(ctx.data[CUR_RGBA], buf, i);
 #pragma unroll 4
-                for (int i = 0; i < 4; i++) {
-                    mean[i] += buf[i];
-                    sigma[i] += buf[i] * buf[i];
+                    for (int i = 0; i < 4; i++) {
+                        mean[i] += buf[i];
+                        sigma[i] += buf[i] * buf[i];
+                    }
                 }
             }
-        }
-        float w = 1.0f / cnt;
+            float w = 1.0f / cnt;
 #pragma unroll 4
-        for (int i = 0; i < 4; i++) {
-            mean[i] *= w;
-            sigma[i] *= w;
-            float ta = sigma[i];
-            float tb = mean[i] * mean[i];
-            sigma[i] = sqrtf(sigma[i] - mean[i] * mean[i] + 1e-5);
+            for (int i = 0; i < 4; i++) {
+                mean[i] *= w;
+                sigma[i] *= w;
+                sigma[i] = sqrtf(sigma[i] - mean[i] * mean[i] + 1e-5);
 
-            prev_rgba[i] = clamp(
-                prev_rgba[i], 
-                mean[i] - opt.clamp_k * sigma[i],
-                mean[i] + opt.clamp_k * sigma[i]
-            );
+                prev_rgba[i] = clamp(
+                    prev_rgba[i], 
+                    mean[i] - opt.clamp_k * sigma[i],
+                    mean[i] + opt.clamp_k * sigma[i]
+                );
+            }
+
         }
+        // remove leaked camera ray
+        float prev_d = ctx.data[PREV_D][idx];
+        if (fabsf(prev_d - cur_d) > opt.depth_diff_thresh) {
+            alpha = 0.f;
+        }
+        
 
+        // alpha blend
+        const float nalpha = 1.0f - alpha;
+    #pragma unroll
+        for (int i = 0; i < 4; i++) {
+            rgba[i] = rgba[i] * alpha + prev_rgba[i] * nalpha;
+        }
     }
-    // remove leaked camera ray
-    float prev_d = ctx.data[PREV_D][idx];
-    if (fabsf(prev_d - cur_d) > opt.depth_diff_thresh) {
-        alpha = 0.f;
-    }
-    
 
-    // alpha blend
-    const float nalpha = 1.0f - alpha;
-#pragma unroll
-    for (int i = 0; i < 4; i++) {
-        rgba[i] = rgba[i] * alpha + prev_rgba[i] * nalpha;
-    }
-    
-output:
+    // output
     float out[4];
     if (opt.show_ctx == CUR_RGBA) {
         read_rgba_float4(ctx.data[CUR_RGBA], out, idx);
@@ -445,7 +441,6 @@ output:
         cudaBoundaryModeZero); // squelches out-of-bound writes
 }
 
-
 __global__ void update_prev_frame(
         RenderContext ctx,
         RenderOptions opt,
@@ -453,7 +448,7 @@ __global__ void update_prev_frame(
     const int& width = cam.width;
     const int& height = cam.height;
     CUDA_GET_THREAD_ID(idx, width * height);
-    const int x = idx % width, y = idx / width;
+    // const int x = idx % width, y = idx / width;
 
     // save rgba to prev frame
     float rgba[4];
@@ -511,9 +506,9 @@ __host__ void launch_renderer(const N3Tree& tree,
     const int N_CUDA_THREADS = 512;
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
 
-    bool same_pose = true;
     // camera compare
     if (options.delta_tracking) {
+        bool same_pose = true;
         if (!ctx.cam_inited) {
             ctx.recordCamera(cam);
             ctx.cam_inited = true;
@@ -541,6 +536,9 @@ __host__ void launch_renderer(const N3Tree& tree,
                 options,
                 cam
             );
+            // record camera
+            ctx.recordCamera(cam);
+            if (!ctx.has_history) ctx.has_history = true;
             ctx.spp = 1;
         }
     }
@@ -567,11 +565,6 @@ __host__ void launch_renderer(const N3Tree& tree,
             options,
             image_arr
         );
-        // record camera
-        if (!same_pose) {
-            ctx.recordCamera(cam);
-            if (!ctx.has_history) ctx.has_history = true;
-        }
 
         // update rng
         ctx.rng.advance();

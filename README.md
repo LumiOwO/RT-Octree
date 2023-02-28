@@ -4,6 +4,8 @@
 
 This implementation is based on [PlenOctree](https://github.com/sxyu/volrend)
 
+./volrend_headless ../data/lego/tree.npz -i ../data/lego/intrinsics.txt  $(ls -1v ../data/lego/pose/*) -o ../output_img
+
 ---
 
 
