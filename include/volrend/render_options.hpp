@@ -62,7 +62,7 @@ struct RenderOptions {
     float clamp_k = 1.0f;
     float prev_weight = 9;
     int show_ctx = 4;
-    float depth_diff_thresh = 1.3f;
+    float depth_diff_thresh = 9.3f;
 };
 
 }  // namespace volrend
