@@ -13,7 +13,7 @@
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/renderer_kernel.hpp"
 #include "volrend/internal/imwrite.hpp"
-#include "volrend/pcg32.h"
+#include "pcg32.h"
 
 namespace volrend {
 

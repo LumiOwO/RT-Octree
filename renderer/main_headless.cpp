@@ -18,7 +18,7 @@
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/renderer_kernel.hpp"
 #include "volrend/internal/imwrite.hpp"
-#include "volrend/json.hpp"
+#include "json.hpp"
 
 using json = nlohmann::json;
 

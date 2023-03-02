@@ -2,7 +2,7 @@
 
 #include <cuda_runtime.h>
 
-#include "volrend/pcg32.h"
+#include "pcg32.h"
 #include "volrend/cuda/common.cuh"
 #include "volrend/camera.hpp"
 

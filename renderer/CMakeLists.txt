@@ -176,6 +176,9 @@ endif()
 include_directories(
     ${PROJECT_BINARY_DIR}/3rdparty/zlib
     )
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
+    )
 
 set (_VOLREND_PNG_ "// ")
 if (NOT EMSCRIPTEN)
