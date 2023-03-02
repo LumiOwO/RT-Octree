@@ -1,7 +1,7 @@
 build/
 embuild/
 build-emcc/
-data/
+data
 output*/
 *.npz
 *.zip
