@@ -231,6 +231,10 @@ int main(int argc, char *argv[])
     if (out_dir.size())
     {
         std::filesystem::create_directories(out_dir);
+        std::filesystem::create_directories(out_dir + "/plenoctree");
+        std::filesystem::create_directories(out_dir + "/copy");
+        std::filesystem::create_directories(out_dir + "/trans");
+        std::filesystem::create_directories(out_dir + "/rotate");
         buf.resize(4 * width * height);
     }
 
@@ -246,23 +250,27 @@ int main(int argc, char *argv[])
     RenderContext ctx;
     ctx.resize(width, height);
 
-    // warm up
-    ctx.clearHistory();
-    camera.transform = trans[0];
-    camera._update(false);
-    for (size_t i = 0; i < 1024; ++i)
-    {
-        launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    }
+    // // warm up
+    // ctx.clearHistory();
+    // camera.transform = trans[0];
+    // camera._update(false);
+    // for (size_t i = 0; i < 1024; ++i)
+    // {
+    //     launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
+    // }
 
-    // // options.show_ctx = 0;
+    options.denoise = false;
+    options.clamp_support = 2;
+    options.clamp_k = 1.0f;
+    options.depth_diff_thresh = 100000.0f;
+    options.prev_weight = 0.f;
 
-    // // render poses
-    int interpol_num = 100;
+    // render poses
+    int interpol_num = 2;
     int warm_up_num = 10;
-    int copy_num = 64;
-    float max_trans_legth = 0.015;
-    float max_rotate_degree = 1;
+    int copy_num = 4096;
+    float max_trans_legth = 50;
+    float max_rotate_degree = 5;
     max_rotate_degree = max_rotate_degree * 3.14159 / 180;
     float delta_degree = max_rotate_degree / (float)interpol_num;
     float delta_len = max_trans_legth / float(interpol_num);
@@ -297,13 +305,27 @@ int main(int argc, char *argv[])
             else if (trans_i == 1)
             {
                 trans[i][3][0] -= interpol_num * delta_len;
-                ctx.clearHistory();
                 trans[i][3][0] += delta_len;
+                ctx.clearHistory();
+                camera.transform = trans[i];
                 camera._update(false);
-                for (size_t i = 0; i < 10; ++i)
+                for (size_t i = 0; i < warm_up_num; ++i)
                 {
                     launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
                 }
+                // if (out_dir.size())
+                // {
+                //     cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
+                //                                 sizeof(float4) * width, height,
+                //                                 cudaMemcpyDeviceToHost, stream));
+                //     auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
+                //     for (int j = 0; j < buf.size(); j++)
+                //     {
+                //         buf_uint8[j] = buf[j] * 255;
+                //     }
+                //     std::string fpath = out_dir + "/trans/" + basenames[i] + ".png";
+                //     internal::write_png_file(fpath, buf_uint8.data(), width, height);
+                // }
                 for (int inter_i = 1; inter_i < interpol_num; inter_i++)
                 {
                     trans[i][3][0] += delta_len;
@@ -368,20 +390,34 @@ int main(int argc, char *argv[])
             }
         }
     }
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    size_t cnt = trans.size() * (copy_num + (interpol_num - 1 + warm_up_num) * 2);
+    milliseconds = milliseconds / cnt;
+
+    printf("%.10f ms per frame\n", milliseconds);
+    printf("%.10f fps\n", 1000.f / milliseconds);
+
     // plenoctree
     options.delta_tracking = false;
     ctx.clearHistory();
-    for (size_t i = 0; i < trans.size(); ++i) {
+    for (size_t i = 0; i < trans.size(); ++i)
+    {
         camera.transform = trans[i];
         camera._update(false);
 
         launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-        if (out_dir.size()) {
+        if (out_dir.size())
+        {
             cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
                                         sizeof(float4) * width, height,
                                         cudaMemcpyDeviceToHost, stream));
             auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-            for (int j = 0; j < buf.size(); j++) {
+            for (int j = 0; j < buf.size(); j++)
+            {
                 buf_uint8[j] = buf[j] * 255;
             }
             std::string fpath = out_dir + "/plenoctree/" + basenames[i] + ".png";
@@ -390,12 +426,6 @@ int main(int argc, char *argv[])
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    milliseconds = milliseconds / trans.size() ;
-
-    printf("%.10f ms per frame\n", milliseconds);
-    printf("%.10f fps\n", 1000.f / milliseconds);
 
     cuda(FreeArray(array));
     cuda(StreamDestroy(stream));

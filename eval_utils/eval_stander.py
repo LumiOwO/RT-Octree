@@ -25,7 +25,7 @@ loss_fn = lpips.LPIPS(net='vgg').to('cuda')
 
 
 
-filePath = '/home/yiran/szx/volrend/output_img/temp/'
+filePath = '/home/yiran/szx/volrend/output_img/copy/'
 filelist=os.listdir(filePath)
 psnr_value_co=0.0
 ssim_value_co=0.0
@@ -49,7 +49,7 @@ for filename in filelist:
     imgro = cv2.imread("/home/yiran/szx/volrend/output_img/rotate/"+ filename)
     imgtrans = cv2.imread("/home/yiran/szx/volrend/output_img/trans/"+ filename)
     imgplen = cv2.imread("/home/yiran/szx/volrend/output_img/plenoctree/"+ filename)
-    imggt = cv2.imread("/home/yiran/szx/nerf_synthetic/ship/test/"+filename,cv2.IMREAD_UNCHANGED)
+    imggt = cv2.imread("/home/yiran/szx/nerf_synthetic/lego/test/"+filename,cv2.IMREAD_UNCHANGED)
     B, G, R, A = cv2.split(imggt)
     alpha = A / 255
     R = (255 * (1 - alpha) + R * alpha).astype(np.uint8)
