@@ -1,26 +1,52 @@
 import torch
-from tqdm import tqdm, trange
 
-import denoiser.utils as utils
+from pathlib import Path
+
+from denoiser.utils import seed_everything
 from denoiser.runner import Runner
+from denoiser.dataset import DenoiserDataset
+from denoiser.logger.base_logger import BaseLogger
+from denoiser.logger.wandb_logger import WandbLogger
 
 import configargparse
 
 def main(args):
-    # init
-    utils.seed_everything(0)
+    # Init
+    seed_everything(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # test
+    from denoiser.network import _denoiser
+    x = torch.ones((1, 800, 800, 3), dtype=torch.float32).to(device)
+    print("compile succeed")
+    imgs_in = torch.ones((1, 800, 800, 3), dtype=torch.float32).to(device)
+    imgs_out = torch.ones((1, 800, 800, 3), dtype=torch.float32).to(device)
+    _denoiser.filtering(x, imgs_in, imgs_out)
+    return
+
+    # Logger
+    if args.use_wandb:
+        logger = WandbLogger(args)
+    else:
+        logger = BaseLogger()
+    Path(args.logs_dir).mkdir(parents=True, exist_ok=True)
+
     # Load data
-    dataloader = NeRFDataset(ars, device=device, type='train').dataloader()
+    dataset = DenoiserDataset(args, device=device)
+    logger.print("Dataset loaded.")
+
+    # Create model
+    model = DenoiserNetwork()
 
     # Create runner
-    runner = Runner(args, dataloader, device=device)
+    runner = Runner(args, dataset, logger, device=device)
     if args.task == "train":
-        runner.train()
-    else if arg.task == "eval":
-        runner.eval()
-    else
+        runner.train(model)
+    elif args.task == "test":
+        runner.test(model)
+    elif args.task == "compact":
+        runner.compact(model)
+    else:
         raise NotImplementedError("Invalid task type.")
 
 
@@ -28,13 +54,13 @@ if __name__ == "__main__":
     parser = configargparse.ArgumentParser()
     parser.add_argument("--config", is_config_file=True, 
                         help="config file path")
-    parser.add_argument("--task", type=str, choices=["train", "eval"],
+    parser.add_argument("--task", type=str, choices=["train", "test", "compact"],
+                        help="task type")
+    parser.add_argument("--exp_name", type=str, 
                         help="experiment name")
-    parser.add_argument("--expname", type=str, 
-                        help="experiment name")
-    parser.add_argument("--basedir", type=str, default="./logs/", 
+    parser.add_argument("--logs_dir", type=str, default="../logs/", 
                         help="where to store ckpts and logs")
-    parser.add_argument("--datadir", type=str, default="./data/llff/fern", 
+    parser.add_argument("--data_dir", type=str, default="../data/nerf_synthetic/lego", 
                         help="input data directory")
 
     # training options
@@ -62,6 +88,10 @@ if __name__ == "__main__":
                         help="do not reload weights from saved ckpt")
     parser.add_argument("--ft_path", type=str, default=None, 
                         help="specific weights npy file to reload for coarse network")
+    parser.add_argument("--batch_size", type=str, default=16, 
+                        help="batch_size for dataloader")
+    parser.add_argument("--num_workers", type=int, default=12, 
+                        help="num_workers for dataloader")
 
     # rendering options
     parser.add_argument("--N_samples", type=int, default=64, 
@@ -136,7 +166,7 @@ if __name__ == "__main__":
 
     # args check
     args = parser.parse_args()
-    if args.task == "eval":
+    if args.task != "train":
         args.use_wandb = False
-    
+
     main(args)
