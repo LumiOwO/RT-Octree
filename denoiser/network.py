@@ -98,7 +98,7 @@ class DenoiserNetwork(nn.Module):
         guidance_net.append(RepVGG(in_channels, mid_channels))
         for _ in range(num_layers - 2):
             guidance_net.append(RepVGG(mid_channels, mid_channels))
-        guidance_net.append(RepVGG(mid_channels, kernel_levels * 2)) # [weights, kernels]
+        guidance_net.append(RepVGG(mid_channels, kernel_levels * 2)) # even: weights, odd: kernels
         self.guidance_net = nn.ModuleList(guidance_net)
 
     def forward(self, imgs_in):

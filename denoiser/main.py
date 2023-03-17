@@ -20,11 +20,42 @@ def main(args):
     from denoiser.network import _denoiser
     print("compile succeed")
     x = torch.rand((2, 5, 5, 4), dtype=torch.float32).to(device)
+    for i in range(2):
+        for j in range(5):
+            for k in range(5):
+                tmp = x[i,j,k].clone()
+                tmp[1] = x[i,j,k][2]
+                tmp[2] = x[i,j,k][1]
+                x[i,j,k] = tmp
     imgs_in = torch.rand((2, 5, 5, 3), dtype=torch.float32).to(device)
     imgs_out = torch.zeros((2, 5, 5, 3), dtype=torch.float32).to(device)
-    _denoiser.filtering(x, imgs_in, imgs_out)
-    # print(imgs_in.permute(0, 3, 1, 2))
-    # print(imgs_out.permute(0, 3, 1, 2))
+    x.requires_grad = True
+    # forward
+    print("before filtering")
+    imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    print("after filtering")
+    print(imgs_in.permute(0, 3, 1, 2))
+    print(imgs_out.permute(0, 3, 1, 2))
+    loss = imgs_out.sum()
+    print("before backward")
+    loss.backward()
+    print("after backward")
+    print(x.grad)
+    # print(x)
+
+    # # check grad
+    # from torch.autograd import gradcheck
+    # # gradcheck takes a tuple of tensors as input, check if your gradient
+    # # evaluated with these tensors are close enough to numerical
+    # # approximations and returns True if they all verify this condition.
+    # test = gradcheck(_denoiser.filtering, (x, imgs_in, imgs_out), eps=1e-3, check_undefined_grad=False)
+    # print(test)
+    # eps = 1e-3
+    # imgs_out_t = torch.zeros((2, 5, 5, 3), dtype=torch.float32).to(device)
+    # imgs_out_t = _denoiser.filtering(x + eps, imgs_in, imgs_out_t)
+    # grad = (imgs_out_t - imgs_out) / eps
+    # print(grad)
+
     return
 
     # Logger
