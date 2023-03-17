@@ -14,7 +14,7 @@ def main(args):
     # Init
     seed_everything(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    assert device.type == "cuda", "CPU device not supported."
+    assert device.type == "cuda", "CPU-only not supported."
 
     # test
     from denoiser.network import _denoiser
@@ -23,8 +23,8 @@ def main(args):
     imgs_in = torch.rand((2, 5, 5, 3), dtype=torch.float32).to(device)
     imgs_out = torch.zeros((2, 5, 5, 3), dtype=torch.float32).to(device)
     _denoiser.filtering(x, imgs_in, imgs_out)
-    print(imgs_in.permute(0, 3, 1, 2))
-    print(imgs_out.permute(0, 3, 1, 2))
+    # print(imgs_in.permute(0, 3, 1, 2))
+    # print(imgs_out.permute(0, 3, 1, 2))
     return
 
     # Logger

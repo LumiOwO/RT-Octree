@@ -50,24 +50,12 @@ __global__ void weights_softmax(const int SIZE, const int L, scalar_t* input) {
     }
 }
 
-__global__ void
-compute_neighbor_offset(const int K, const int W, int* neighbor_offset) {
-    // locate
-    CUDA_GET_THREAD_ID(idx, K * K);
-    const int x = idx % K;
-    const int y = idx / K;
-
-    const int&& support = K >> 1;
-    neighbor_offset[idx]  = (y - support) * W + x - support;
-}
-
 template <typename scalar_t>
 __global__ void applying(
     const int SIZE,
     const int H,
     const int W,
     const int support,
-    // const int* __restrict__ neighbor_offset,  // [K * K]
     const scalar_t* __restrict__ kernel_map,  // [B, H, W]
     const scalar_t* __restrict__ imgs_in,     // [B, H, W, 3]
     const scalar_t* __restrict__ max_map,     // [B, H, W]
@@ -199,31 +187,11 @@ public:
             input.index({level + L}),
             F::MaxPool2dFuncOptions(K).padding(support).stride(1));
 
-        std::cout << "input sizes:"
-                  << input.index({level + L}).sizes()
-                  << std::endl;
-        std::cout << "sizes:" << max_map.sizes() << std::endl;
-        std::cout << "kernel_map " << input.index({level + L}) << std::endl;
-        std::cout << "max_map " << max_map << std::endl;
-        std::cout << "weight_map " << input.index({level}) << std::endl;
-
         // buffer
         torch::TensorOptions tensor_options =
             torch::TensorOptions().dtype(input.dtype()).device(torch::kCUDA);
         auto rgb_sum    = torch::zeros_like(imgs_out, tensor_options);
         auto kernel_sum = torch::zeros_like(max_map, tensor_options);
-
-        // compute neighbor offset
-        auto neighbor_offset =
-            torch::zeros({K_SIZE}, tensor_options.dtype(torch::kInt32));
-        const int offset_blocks   = N_BLOCKS_NEEDED(K_SIZE, N_THREADS);
-        // clang-format off
-        kernel::compute_neighbor_offset
-            <<<offset_blocks, N_THREADS, 0, stream>>>(
-                K, W,
-                neighbor_offset.data_ptr<int>());
-        // clang-format on
-        std::cout << "neighbor_offset " << neighbor_offset << std::endl;
 
         // apply kernel
         const int applying_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
@@ -236,7 +204,6 @@ public:
                         H,
                         W,
                         support,
-                        // neighbor_offset.data_ptr<int>(),
                         input.data_ptr<scalar_t>() + (level + L) * SIZE,  // kernel map
                         imgs_in.data_ptr<scalar_t>(),
                         max_map.data_ptr<scalar_t>(),
@@ -244,9 +211,6 @@ public:
                         kernel_sum.data_ptr<scalar_t>());
             }));
         // clang-format on
-        std::cout << "rgb_sum " << rgb_sum.permute({0, 3 ,1, 2}) << std::endl;
-        std::cout << "kernel_map " << input.index({level + L}) << std::endl;
-        std::cout << "kernel_sum " << kernel_sum << std::endl;
 
         // normalize & accumulate
         const int normalize_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
