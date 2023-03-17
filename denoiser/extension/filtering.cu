@@ -64,8 +64,10 @@ compute_neighbor_offset(const int K, const int W, int* neighbor_offset) {
 template <typename scalar_t>
 __global__ void applying(
     const int SIZE,
-    const int level,
-    const int* __restrict__ neighbor_offset,  // [K * K]
+    const int H,
+    const int W,
+    const int support,
+    // const int* __restrict__ neighbor_offset,  // [K * K]
     const scalar_t* __restrict__ kernel_map,  // [B, H, W]
     const scalar_t* __restrict__ imgs_in,     // [B, H, W, 3]
     const scalar_t* __restrict__ max_map,     // [B, H, W]
@@ -74,12 +76,21 @@ __global__ void applying(
 ) {
 
     // locate
-    const int K      = 3 + (level << 1);
-    const int K_SIZE = K * K;
+    const int K        = 1 + (support << 1);
+    const int K_SIZE   = K * K;
     CUDA_GET_THREAD_ID(idx, SIZE * K_SIZE);
-    const int pixel_idx = idx / K_SIZE;
-    const int kernel_idx = idx % K_SIZE;
-    const int neighbor_idx = pixel_idx + neighbor_offset[kernel_idx];
+    const int pixel_idx    = idx / K_SIZE;
+    const int kernel_idx   = idx % K_SIZE;
+
+    const int lower_bound  = pixel_idx - pixel_idx % (H * W);
+    const int pixel_y      = (pixel_idx - lower_bound) / W;
+    const int neighbor_y   = pixel_y - support + kernel_idx / K;
+    if (neighbor_y < 0 || neighbor_y >= H) return;
+    const int pixel_x      = pixel_idx % W;
+    const int neighbor_x   = pixel_x - support + kernel_idx % K;
+    if (neighbor_x < 0 || neighbor_x >= W) return;
+
+    const int neighbor_idx = lower_bound + neighbor_y * W + neighbor_x;
     kernel_map += neighbor_idx;
     imgs_in += neighbor_idx * 3;
     max_map += pixel_idx;
@@ -87,7 +98,7 @@ __global__ void applying(
     kernel_sum += pixel_idx;
 
     // accumulate
-    const scalar_t& k      = __expf(kernel_map[0] - max_map[0]);
+    const scalar_t& k = __expf(kernel_map[0] - max_map[0]);
     gpuAtomicAdd(&rgb_sum[0], k * imgs_in[0]);
     gpuAtomicAdd(&rgb_sum[1], k * imgs_in[1]);
     gpuAtomicAdd(&rgb_sum[2], k * imgs_in[2]);
@@ -126,14 +137,14 @@ public:
     // forward
     static torch::Tensor forward(
         torch::autograd::AutogradContext* ctx,
-        torch::Tensor&                    input,    // [B, H, W, L * 2]
-        torch::Tensor&                    imgs_in,  // [B, H, W, 3]
-        torch::Tensor&                    imgs_out  // [B, H, W, 3]
+        torch::Tensor                     input,    // [B, H, W, L * 2]
+        torch::Tensor                     imgs_in,  // [B, H, W, 3]
+        torch::Tensor                     imgs_out  // [B, H, W, 3]
     ) {
-        const int B        = imgs_in.size(0);
-        const int H        = imgs_in.size(1);
-        const int W        = imgs_in.size(2);
-        const int L        = imgs_in.size(3) >> 1;
+        const int B        = input.size(0);
+        const int H        = input.size(1);
+        const int W        = input.size(2);
+        const int L        = input.size(3) >> 1;
         const int SIZE     = B * H * W;
 
         // init
@@ -159,39 +170,52 @@ public:
         // applying & fusing
         for (int level = 0; level < L; level++) {
             accumulate_one_level(
-                stream, level, SIZE, W, L, input, imgs_in, imgs_out);
+                stream, level, SIZE, H, W, L, input, imgs_in, imgs_out);
         }
 
         return imgs_out;  // [B, H, W, 3]
     }
 
     static void accumulate_one_level(
-        cudaStream_t&  stream,
-        const int&     level,
-        const int&     SIZE,
-        const int&     W,
-        const int&     L,
-        torch::Tensor& input,
-        torch::Tensor& imgs_in,
-        torch::Tensor& imgs_out) {
+        cudaStream_t  stream,
+        const int     level,
+        const int     SIZE,
+        const int     H,
+        const int     W,
+        const int     L,
+        torch::Tensor input,
+        torch::Tensor imgs_in,
+        torch::Tensor imgs_out) {
 
         // kernel size
-        const int K = 3 + (level << 1);
-        const int K_SIZE = K * K;
-    
+        const int support = level + 1;
+        const int K       = 1 + (support << 1);
+        const int K_SIZE  = K * K;
+
         // use max pooling to find maximum value in the kernel
         // max_map [B, H, W]
         namespace F = torch::nn::functional;
         auto max_map = F::max_pool2d(
             input.index({level + L}),
-            F::MaxPool2dFuncOptions(K).padding(level + 1));
+            F::MaxPool2dFuncOptions(K).padding(support).stride(1));
+
+        std::cout << "input sizes:"
+                  << input.index({level + L}).sizes()
+                  << std::endl;
+        std::cout << "sizes:" << max_map.sizes() << std::endl;
+        std::cout << "kernel_map " << input.index({level + L}) << std::endl;
+        std::cout << "max_map " << max_map << std::endl;
+        std::cout << "weight_map " << input.index({level}) << std::endl;
 
         // buffer
-        auto rgb_sum    = torch::zeros_like(imgs_out);
-        auto kernel_sum = torch::zeros_like(max_map);
+        torch::TensorOptions tensor_options =
+            torch::TensorOptions().dtype(input.dtype()).device(torch::kCUDA);
+        auto rgb_sum    = torch::zeros_like(imgs_out, tensor_options);
+        auto kernel_sum = torch::zeros_like(max_map, tensor_options);
 
         // compute neighbor offset
-        auto      neighbor_offset = torch::zeros({K_SIZE});
+        auto neighbor_offset =
+            torch::zeros({K_SIZE}, tensor_options.dtype(torch::kInt32));
         const int offset_blocks   = N_BLOCKS_NEEDED(K_SIZE, N_THREADS);
         // clang-format off
         kernel::compute_neighbor_offset
@@ -199,6 +223,7 @@ public:
                 K, W,
                 neighbor_offset.data_ptr<int>());
         // clang-format on
+        std::cout << "neighbor_offset " << neighbor_offset << std::endl;
 
         // apply kernel
         const int applying_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
@@ -208,8 +233,10 @@ public:
                 kernel::applying<scalar_t>
                     <<<applying_blocks, N_THREADS, 0, stream>>>(
                         SIZE,
-                        level,
-                        neighbor_offset.data_ptr<int>(),
+                        H,
+                        W,
+                        support,
+                        // neighbor_offset.data_ptr<int>(),
                         input.data_ptr<scalar_t>() + (level + L) * SIZE,  // kernel map
                         imgs_in.data_ptr<scalar_t>(),
                         max_map.data_ptr<scalar_t>(),
@@ -217,6 +244,9 @@ public:
                         kernel_sum.data_ptr<scalar_t>());
             }));
         // clang-format on
+        std::cout << "rgb_sum " << rgb_sum.permute({0, 3 ,1, 2}) << std::endl;
+        std::cout << "kernel_map " << input.index({level + L}) << std::endl;
+        std::cout << "kernel_sum " << kernel_sum << std::endl;
 
         // normalize & accumulate
         const int normalize_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
@@ -254,9 +284,10 @@ public:
 };
 
 void filtering(
-    torch::Tensor& input,
-    torch::Tensor& imgs_in,
-    torch::Tensor& imgs_out) {
+    torch::Tensor input,
+    torch::Tensor imgs_in,
+    torch::Tensor imgs_out) {
+    
     Filtering::apply(input, imgs_in, imgs_out);
 }
 
