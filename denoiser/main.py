@@ -19,36 +19,69 @@ def main(args):
     # test
     from denoiser.network import _denoiser
     print("compile succeed")
-    x = torch.rand((2, 5, 5, 4), dtype=torch.float32).to(device)
-    for i in range(2):
-        for j in range(5):
-            for k in range(5):
-                tmp = x[i,j,k].clone()
-                tmp[1] = x[i,j,k][2]
-                tmp[2] = x[i,j,k][1]
-                x[i,j,k] = tmp
-    imgs_in = torch.rand((2, 5, 5, 3), dtype=torch.float32).to(device)
-    imgs_out = torch.zeros((2, 5, 5, 3), dtype=torch.float32).to(device)
+    B = 1
+    H = 1280
+    W = 720
+    x = torch.ones((B, H, W, 12), dtype=torch.float32).to(device)
+    imgs_in = torch.ones((B, H, W, 3), dtype=torch.float32).to(device)
+    for i in range(B):
+        for j in range(H):
+            imgs_in[i,j] = j
+    imgs_out = torch.zeros((B, H, W, 3), dtype=torch.float32).to(device)
     x.requires_grad = True
     # forward
     print("before filtering")
-    imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    print(f"{x.requires_grad=}")
+    with torch.no_grad():
+        print(f"{x.requires_grad=}")
+        imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
     print("after filtering")
-    print(imgs_in.permute(0, 3, 1, 2))
-    print(imgs_out.permute(0, 3, 1, 2))
-    loss = imgs_out.sum()
-    print("before backward")
-    loss.backward()
-    print("after backward")
-    print(x.grad)
+
+    # time
+    print('warm up ...\n')
+    with torch.no_grad():
+        for _ in range(1):
+            imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    torch.cuda.synchronize()
+
+    # import numpy as np
+    # print('test time ...\n')
+    # starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    # iters = 100
+    # timings = np.zeros((iters, 1))
+    # with torch.no_grad():
+    #     for rep in range(iters):
+    #         starter.record()
+    #         imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    #         ender.record()
+    #         torch.cuda.synchronize()
+    #         curr_time = starter.elapsed_time(ender) # 从 starter 到 ender 之间用时,单位为毫秒
+    #         timings[rep] = curr_time
+    # avg = timings.sum() / iters
+    # print(f"{avg=}")
+
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]) as prof:
+        with torch.no_grad():
+            imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    
+    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+        
+    # print(imgs_in.permute(0, 3, 1, 2))
+    # print(imgs_out.permute(0, 3, 1, 2))
+    # loss = imgs_out.sum()
+    # print("before backward")
+    # loss.backward()
+    # print("after backward")
+    # print(x.grad.permute(3, 0, 1, 2) / 3)
     # print(x)
 
-    # # check grad
+    # check grad
     # from torch.autograd import gradcheck
     # # gradcheck takes a tuple of tensors as input, check if your gradient
     # # evaluated with these tensors are close enough to numerical
     # # approximations and returns True if they all verify this condition.
-    # test = gradcheck(_denoiser.filtering, (x, imgs_in, imgs_out), eps=1e-3, check_undefined_grad=False)
+    # imgs_out = torch.zeros((B, H, W, 3), dtype=torch.float32).to(device)
+    # test = gradcheck(_denoiser.filtering, (x, imgs_in, imgs_out), eps=1e-3, check_undefined_grad=True)
     # print(test)
     # eps = 1e-3
     # imgs_out_t = torch.zeros((2, 5, 5, 3), dtype=torch.float32).to(device)

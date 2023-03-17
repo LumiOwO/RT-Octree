@@ -1,7 +1,9 @@
 #include <ATen/cuda/CUDAContext.h>
+#include <cuda_fp16.h>
 #include <torch/extension.h>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/native/cuda/KernelUtils.cuh>
 
 #include "filtering.h"
 
@@ -27,6 +29,10 @@ namespace denoiser {
 
 namespace kernel {
 
+__device__ __forceinline__ float  _exp(const float x) { return __expf(x); }
+__device__ __forceinline__ double _exp(const double x) { return exp(x); }
+__device__ __forceinline__ c10::Half _exp(const c10::Half x) { return hexp(x); }
+
 template <typename scalar_t>
 __global__ void weights_softmax(const int SIZE, const int L, scalar_t* input) {
     // locate
@@ -41,7 +47,7 @@ __global__ void weights_softmax(const int SIZE, const int L, scalar_t* input) {
     scalar_t sum = 0;
     for (int i = 0; i < L; i++) {
         auto& w = input[i << 1];
-        w = __expf(w - max_val);
+        w = _exp(w - max_val);
         sum += w;
     }
 
@@ -87,11 +93,15 @@ __global__ void applying(
     kernel_sum += pixel_idx;
 
     // accumulate
-    const scalar_t& k = __expf(kernel_map[0] - max_map[0]);
-    gpuAtomicAdd(&rgb_sum[0], k * imgs_in[0]);
-    gpuAtomicAdd(&rgb_sum[1], k * imgs_in[1]);
-    gpuAtomicAdd(&rgb_sum[2], k * imgs_in[2]);
-    gpuAtomicAdd(kernel_sum, k);
+    const scalar_t& k = _exp(kernel_map[0] - max_map[0]);
+    // gpuAtomicAdd(&rgb_sum[0], k * imgs_in[0]);
+    // gpuAtomicAdd(&rgb_sum[1], k * imgs_in[1]);
+    // gpuAtomicAdd(&rgb_sum[2], k * imgs_in[2]);
+    // gpuAtomicAdd(kernel_sum, k);
+    at::native::fastAtomicAdd(rgb_sum, 0, 1, k * imgs_in[0], true);
+    at::native::fastAtomicAdd(rgb_sum, 1, 1, k * imgs_in[1], true);
+    at::native::fastAtomicAdd(rgb_sum, 2, 1, k * imgs_in[2], true);
+    at::native::fastAtomicAdd(kernel_sum, 0, 1, k, true);
 }
 
 template <typename scalar_t>
@@ -194,7 +204,7 @@ __global__ void grad_kernel_accumulate(
     // clang-format on
 
     // accumulate grad
-    const scalar_t& k = __expf(kernel_map[0] - max_map[0]) / kernel_sum[0];
+    const scalar_t& k = _exp(kernel_map[0] - max_map[0]) / kernel_sum[0];
     scalar_t res = 0;
     res += grad_output[0] * (imgs_in[0] - rgb_sum_map[0]);
     res += grad_output[1] * (imgs_in[0] - rgb_sum_map[0]);
@@ -213,10 +223,10 @@ public:
     // forward
     static torch::Tensor forward(
         torch::autograd::AutogradContext* ctx,
-        torch::Tensor input,    // [B, H, W, L * 2], will be in-place modified
-        torch::Tensor imgs_in,  // [B, H, W, 3]
-        torch::Tensor imgs_out  // [B, H, W, 3]
-    ) {
+        torch::Tensor input,     // [B, H, W, L * 2], will be in-place modified
+        torch::Tensor imgs_in,   // [B, H, W, 3]
+        torch::Tensor imgs_out,  // [B, H, W, 3]
+        bool          requires_grad) {
         const int B    = input.size(0);
         const int H    = input.size(1);
         const int W    = input.size(2);
@@ -224,7 +234,6 @@ public:
         const int SIZE = B * H * W;
 
         // init
-        bool         requires_grad = input.requires_grad();
         cudaStream_t stream        = at::cuda::getCurrentCUDAStream();
         cudaMemset(
             imgs_out.data_ptr(),
@@ -232,10 +241,6 @@ public:
             imgs_out.numel() * torch::elementSize(torch::typeMetaToScalarType(
                                    imgs_out.dtype())));
         
-        // TODO: delete!!!
-        torch::TensorOptions tensor_options =
-            torch::TensorOptions().dtype(input.dtype()).device(torch::kCUDA);
-        imgs_out = torch::zeros_like(imgs_out, tensor_options);
 
         // weight normalization
         const int weights_softmax_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
@@ -251,7 +256,7 @@ public:
         // variables to save
         auto save = torch::autograd::variable_list{};
         if (requires_grad) {
-            std::cout << "save context" << std::endl;
+            // std::cout << "save context" << std::endl;
             save.resize(2 + L * 3);
             save[0] = input;
             save[1] = imgs_in;
@@ -473,22 +478,22 @@ public:
             }));
         // clang-format on
 
-        std::cout << "grad_output" << grad_output << std::endl;
-        std::cout << "weight_map" << weight_map << std::endl;
-        std::cout << "rgb_sum_map" << rgb_sum_map << std::endl;
-        std::cout << "kernel_map" << kernel_map << std::endl;
-        std::cout << "max_map" << max_map << std::endl;
-        std::cout << "kernel_sum" << max_map << std::endl;
-        std::cout << "grad_kernel" << grad_kernel << std::endl;
+        // std::cout << "grad_output" << grad_output << std::endl;
+        // std::cout << "weight_map" << weight_map << std::endl;
+        // std::cout << "rgb_sum_map" << rgb_sum_map << std::endl;
+        // std::cout << "kernel_map" << kernel_map << std::endl;
+        // std::cout << "max_map" << max_map << std::endl;
+        // std::cout << "kernel_sum" << max_map << std::endl;
+        // std::cout << "grad_kernel" << grad_kernel << std::endl;
     }
 };
 
 torch::Tensor filtering(
-    torch::Tensor input,    // [B, H, W, L * 2]
-    torch::Tensor imgs_in,  // [B, H, W, 3]
-    torch::Tensor imgs_out  // [B, H, W, 3]
-) {
-    return Filtering::apply(input, imgs_in, imgs_out);
+    torch::Tensor input,     // [B, H, W, L * 2]
+    torch::Tensor imgs_in,   // [B, H, W, 3]
+    torch::Tensor imgs_out,  // [B, H, W, 3]
+    bool          requires_grad) {
+    return Filtering::apply(input, imgs_in, imgs_out, requires_grad);
 }
 
 }  // namespace denoiser
