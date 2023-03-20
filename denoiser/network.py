@@ -4,79 +4,56 @@ import torch.nn.functional as F
 
 import os
 
-# load cpp extension
-from torch.utils.cpp_extension import load
-pwd = os.path.dirname(os.path.abspath(__file__))
+try:
+    import _denoiser
+except ImportError:
+    print("===== Loading CUDA extension...")
 
-nvcc_flags = [
-    '-O3', '-std=c++14',
-]
-if os.name == "posix":
-    c_flags = ['-O3', '-std=c++14']
-elif os.name == "nt":
-    c_flags = ['/O2', '/std:c++17']
+    # load cpp extension
+    from torch.utils.cpp_extension import load
+    pwd = os.path.dirname(os.path.abspath(__file__))
 
-    # find cl.exe
-    def find_cl_path():
-        import glob
-        for edition in ["Enterprise", "Professional", "BuildTools", "Community"]:
-            paths = sorted(glob.glob(r"C:\\Program Files (x86)\\Microsoft Visual Studio\\*\\%s\\VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x64" % edition), reverse=True)
-            if paths:
-                return paths[0]
+    nvcc_flags = [
+        '-O3', '-std=c++14',
+    ]
+    if os.name == "posix":
+        c_flags = ['-O3', '-std=c++14']
+    elif os.name == "nt":
+        c_flags = ['/O2', '/std:c++17']
 
-    # If cl.exe is not on path, try to find it.
-    if os.system("where cl.exe >nul 2>nul") != 0:
-        cl_path = find_cl_path()
-        if cl_path is None:
-            raise RuntimeError("Could not locate a supported Microsoft Visual C++ installation")
-        os.environ["PATH"] += ";" + cl_path
+        # find cl.exe
+        def find_cl_path():
+            import glob
+            for edition in ["Enterprise", "Professional", "BuildTools", "Community"]:
+                paths = sorted(glob.glob(r"C:\\Program Files (x86)\\Microsoft Visual Studio\\*\\%s\\VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x64" % edition), reverse=True)
+                if paths:
+                    return paths[0]
 
-_denoiser = load(name="_denoiser", 
-                 verbose=True,
-                 extra_cflags=c_flags,
-                 extra_cuda_cflags=nvcc_flags,
-                 sources=[os.path.join(pwd, "extension", f) for f in [
-                     "bindings.cpp",
-                     "filtering.cu",
-                 ]])
-                
+        # If cl.exe is not on path, try to find it.
+        if os.system("where cl.exe >nul 2>nul") != 0:
+            cl_path = find_cl_path()
+            if cl_path is None:
+                raise RuntimeError("Could not locate a supported Microsoft Visual C++ installation")
+            os.environ["PATH"] += ";" + cl_path
 
-# wrap into autograd function
-class LegendrePolynomial3(torch.autograd.Function):
-    """
-    We can implement our own custom autograd Functions by subclassing
-    torch.autograd.Function and implementing the forward and backward passes
-    which operate on Tensors.
-    """
-
-    @staticmethod
-    def forward(ctx, input):
-        """
-        In the forward pass we receive a Tensor containing the input and return
-        a Tensor containing the output. ctx is a context object that can be used
-        to stash information for backward computation. You can cache arbitrary
-        objects for use in the backward pass using the ctx.save_for_backward method.
-        """
-        ctx.save_for_backward(input)
-        return 0.5 * (5 * input ** 3 - 3 * input)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        """
-        In the backward pass we receive a Tensor containing the gradient of the loss
-        with respect to the output, and we need to compute the gradient of the loss
-        with respect to the input.
-        """
-        input, = ctx.saved_tensors
-        return grad_output * 1.5 * (5 * input ** 2 - 1)
+    _denoiser = load(name="_denoiser", 
+                    verbose=True,
+                    extra_cflags=c_flags,
+                    extra_cuda_cflags=nvcc_flags,
+                    sources=[os.path.join(pwd, "extension", f) for f in [
+                        "bindings.cpp",
+                        "filtering.cu",
+                    ]])
+    print("===== CUDA extension loaded.")
 
 class RepVGG(nn.Module):
     def __init__(self, in_channels, out_channels):
+        super(RepVGG, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.conv5 = nn.Conv2d(in_channels, out_channels, 5)
-        self.conv3 = nn.Conv2d(in_channels, out_channels, 3)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 1)
+        self.conv5 = nn.Conv2d(in_channels, out_channels, 5, padding="same")
+        self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
 
     def forward(self, x):
         x5 = self.conv5(x)
@@ -85,31 +62,46 @@ class RepVGG(nn.Module):
         h = x5 + x3 + x1
         if self.in_channels == self.out_channels:
             h = h + x
-        return F.relu(h)
+        return F.relu(h, inplace=True)
 
 class DenoiserNetwork(nn.Module):
     def __init__(self, in_channels, mid_channels, num_layers, kernel_levels):
+        super(DenoiserNetwork, self).__init__()
         self.in_channels = in_channels
         self.mid_channels = mid_channels
         self.num_layers = num_layers
         self.kernel_levels = kernel_levels
 
-        guidance_net = []
-        guidance_net.append(RepVGG(in_channels, mid_channels))
+        layers = []
+        layers.append(RepVGG(in_channels, mid_channels))
         for _ in range(num_layers - 2):
-            guidance_net.append(RepVGG(mid_channels, mid_channels))
-        guidance_net.append(RepVGG(mid_channels, kernel_levels * 2)) # even: weights, odd: kernels
-        self.guidance_net = nn.ModuleList(guidance_net)
+            layers.append(RepVGG(mid_channels, mid_channels))
+        self.layers = nn.ModuleList(layers)
 
-    def forward(self, imgs_in):
+        self.weight_layer = RepVGG(mid_channels, kernel_levels)
+        self.kernel_layer = RepVGG(mid_channels, kernel_levels)
+
+    def forward(self, imgs_in, requires_grad=False):
+        # Only support B == 1
+
         # kernel prediction
-        x = imgs_in
-        for _, layer in enumerate(self.guidance_net):
+        x = imgs_in.permute(0, 3, 1, 2).contiguous() # [B, 3, H, W]
+        for layer in self.layers:
             x = layer(x)
-            x = F.relu(x, inplace=True)
+
+        weight_map = self.weight_layer(x) # [B, L, H, W]
+        weight_map = weight_map.squeeze(0) # [L, H, W]
+        # softmax for weight_map
+        weight_map = F.softmax(weight_map, dim=0)
+
+        kernel_map = self.kernel_layer(x) # [B, L, H, W]
+        kernel_map = kernel_map.squeeze(0) # [L, H, W]
+
         # kernel reconstruction and apply
-        imgs_out = torch.tensor() # [B, H, W, 3]
-        _denoiser.filtering(x, imgs_in, imgs_out)
+        imgs_in = imgs_in.squeeze(0) # [H, W, 3]
+        imgs_out = torch.zeros_like(imgs_in) # [H, W, 3]
+        imgs_out = _denoiser.filtering(
+            weight_map, kernel_map, imgs_in, imgs_out, requires_grad=requires_grad)
         return imgs_out
 
 

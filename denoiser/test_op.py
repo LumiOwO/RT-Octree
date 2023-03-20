@@ -1,16 +1,12 @@
 import torch
 
-import os
 from pathlib import Path
 
 from denoiser.utils import seed_everything
 from denoiser.runner import Runner
 from denoiser.dataset import DenoiserDataset
-
 from denoiser.logger.base_logger import BaseLogger
 from denoiser.logger.wandb_logger import WandbLogger
-
-from denoiser.network import DenoiserNetwork
 
 import configargparse
 
@@ -20,21 +16,100 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     assert device.type == "cuda", "CPU-only not supported."
 
+    # test
+    from denoiser.network import _denoiser
+    print("compile succeed")
+    H = 1024
+    W = 768
+    L = 6
+    x = torch.ones((L * 2, H, W), dtype=torch.float32).to(device)
+    imgs_in = torch.ones((H, W, 3), dtype=torch.float32).to(device)
+    for j in range(H):
+        imgs_in[j] = j
+    imgs_out = torch.zeros((H, W, 3), dtype=torch.float32).to(device)
+    x.requires_grad = True
+
+    # forward
+    # print("before filtering")
+    # print(f"{x.requires_grad=}")
+    # imgs_out = _denoiser.filtering(x[:L], x[L:], imgs_in, imgs_out, requires_grad=True)
+    # print("after filtering")
+    # print(imgs_in.permute(2, 0, 1))
+    # print(imgs_out.permute(2, 0, 1))
+    # loss = imgs_out.sum()
+    # loss.backward()
+
+    # time
+    # print('warm up ...\n')
+    # with torch.no_grad():
+    #     for _ in range(1):
+    #         imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    # torch.cuda.synchronize()
+
+    # # import numpy as np
+    # # print('test time ...\n')
+    # # starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    # # iters = 100
+    # # timings = np.zeros((iters, 1))
+    # # with torch.no_grad():
+    # #     for rep in range(iters):
+    # #         starter.record()
+    # #         imgs_out = _denoiser.filtering(x, imgs_in, imgs_out)
+    # #         ender.record()
+    # #         torch.cuda.synchronize()
+    # #         curr_time = starter.elapsed_time(ender) # 从 starter 到 ender 之间用时,单位为毫秒
+    # #         timings[rep] = curr_time
+    # # avg = timings.sum() / iters
+    # # print(f"{avg=}")
+
+    from denoiser.network import DenoiserNetwork
+    model = DenoiserNetwork(3, 14, 3, 6).to(device)
+    imgs_in = torch.rand((1, H, W, 3), dtype=torch.float32).to(device)
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]) as prof:
+        imgs_out = model.forward(imgs_in, requires_grad=True)
+        loss = imgs_out.sum()
+        loss.backward()
+    
+    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+        
+    # print(imgs_in.permute(0, 3, 1, 2))
+    # print(imgs_out.permute(0, 3, 1, 2))
+    # loss = imgs_out.sum()
+    # print("before backward")
+    # loss.backward()
+    # print("after backward")
+    # print(x.grad.permute(3, 0, 1, 2) / 3)
+    # print(x)
+
+    # check grad
+    # from torch.autograd import gradcheck
+    # # gradcheck takes a tuple of tensors as input, check if your gradient
+    # # evaluated with these tensors are close enough to numerical
+    # # approximations and returns True if they all verify this condition.
+    # imgs_out = torch.zeros((H, W, 3), dtype=torch.float32).to(device)
+    # test = gradcheck(_denoiser.filtering, (x[:L], x[L:], imgs_in, imgs_out, True), eps=1e-1, check_undefined_grad=True)
+    # print(test)
+    # eps = 1e-3
+    # imgs_out_t = torch.zeros((2, 5, 5, 3), dtype=torch.float32).to(device)
+    # imgs_out_t = _denoiser.filtering(x + eps, imgs_in, imgs_out_t)
+    # grad = (imgs_out_t - imgs_out) / eps
+    # print(grad)
+
+    return
+
     # Logger
     if args.use_wandb:
         logger = WandbLogger(args)
     else:
         logger = BaseLogger()
-    Path(args.work_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.logs_dir).mkdir(parents=True, exist_ok=True)
 
     # Load data
     dataset = DenoiserDataset(args, device=device)
     logger.print("Dataset loaded.")
 
     # Create model
-    model = DenoiserNetwork(
-        args.in_channels, args.mid_channels, args.num_layers, args.kernel_levels)
-    model = model.to(device)
+    model = DenoiserNetwork()
 
     # Create runner
     runner = Runner(args, dataset, logger, device=device)
@@ -45,7 +120,7 @@ def main(args):
     elif args.task == "compact":
         runner.compact(model)
     else:
-        raise NotImplementedError(f"Invalid task type: {args.task}.")
+        raise NotImplementedError("Invalid task type.")
 
 
 if __name__ == "__main__":
@@ -54,43 +129,14 @@ if __name__ == "__main__":
                         help="config file path")
     parser.add_argument("--task", type=str, choices=["train", "test", "compact"],
                         help="task type")
-    parser.add_argument("--logs_root", type=str, default="../logs/", 
-                        help="root dir of all experiment logs")
     parser.add_argument("--exp_name", type=str, 
                         help="experiment name")
+    parser.add_argument("--logs_dir", type=str, default="../logs/", 
+                        help="where to store ckpts and logs")
     parser.add_argument("--data_dir", type=str, default="../data/nerf_synthetic/lego", 
                         help="input data directory")
 
-    # logging/saving options
-    parser.add_argument("--use_wandb", action="store_true",  
-                        help="frequency of console printout and metric loggin")
-    parser.add_argument("--i_print",   type=int, default=100, 
-                        help="frequency of console printout and metric loggin")
-    parser.add_argument("--i_img",     type=int, default=500, 
-                        help="frequency of tensorboard image logging")
-    parser.add_argument("--i_weights", type=int, default=10000, 
-                        help="frequency of weight ckpt saving")
-    parser.add_argument("--i_testset", type=int, default=50000, 
-                        help="frequency of testset saving")
-    parser.add_argument("--i_video",   type=int, default=50000, 
-                        help="frequency of render_poses video saving")
-
     # training options
-    parser.add_argument("--in_channels", type=int, default=8, 
-                        help="layers in network")
-    parser.add_argument("--mid_channels", type=int, default=8, 
-    help="layers in network")
-    parser.add_argument("--num_layers", type=int, default=8, 
-    help="layers in network")
-    parser.add_argument("--kernel_levels", type=int, default=8, 
-    help="layers in network")
-    parser.add_argument("--loss_fn", type=str, default="mse", 
-    help="layers in network")
-    parser.add_argument("--lr", type=float, default=5e-4, 
-                        help="learning rate")
-    parser.add_argument('--epochs', type=int, default=30000, help="training iters")
-
-    # 
     parser.add_argument("--netdepth", type=int, default=8, 
                         help="layers in network")
     parser.add_argument("--netwidth", type=int, default=256, 
@@ -179,12 +225,21 @@ if __name__ == "__main__":
     parser.add_argument("--llffhold", type=int, default=8, 
                         help="will take every 1/N images as LLFF test set, paper uses 8")
 
-    
+    # logging/saving options
+    parser.add_argument("--i_print",   type=int, default=100, 
+                        help="frequency of console printout and metric loggin")
+    parser.add_argument("--i_img",     type=int, default=500, 
+                        help="frequency of tensorboard image logging")
+    parser.add_argument("--i_weights", type=int, default=10000, 
+                        help="frequency of weight ckpt saving")
+    parser.add_argument("--i_testset", type=int, default=50000, 
+                        help="frequency of testset saving")
+    parser.add_argument("--i_video",   type=int, default=50000, 
+                        help="frequency of render_poses video saving")
 
-    # args preprocess
+    # args check
     args = parser.parse_args()
     if args.task != "train":
         args.use_wandb = False
-    args.work_dir = os.path.join(args.logs_root, args.exp_name)
 
     main(args)

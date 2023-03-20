@@ -30,31 +30,39 @@ class DenoiserDataset():
         for s in ["train", "val", "test"]:
             if args.task == "test" and s != "test":
                 continue
+            # FIXME: skip val set?
+            if s == "val":
+                continue
 
             with open(os.path.join(args.data_dir, "transforms_{}.json".format(s)), "r") as fp:
                 meta = json.load(fp)
 
             imgs_in = []
             imgs_out = []
+            tqdm.write(f"Loading {s} set...")
             for frame in tqdm(meta["frames"]):
-                name = os.path.join(frame["file_path"])
+                name = os.path.basename(frame["file_path"])
                 img_in = imageio.imread(
-                    os.path.join(args.data_dir, "spp_1", s, name + ".png")).astype(np.float)
-                imgs_in.append(img_in)
+                    os.path.join(args.data_dir, "spp_1", s, name + ".png")).astype(np.float32)
                 img_out = imageio.imread(
-                    os.path.join(args.data_dir, s, name + ".png")).astype(np.float)
-                imgs_out.append(img_out)
+                    os.path.join(args.data_dir, s, name + ".png")).astype(np.float32)
 
-            self.imgs_in[s] = imgs_in
-            self.imgs_out[s] = imgs_out
+                # preprocess channels
+                img_in = img_in[..., :3]
+                if img_out.shape[-1] == 4:
+                    alpha = img_out[..., :-1]
+                    img_out = img_out[..., :3] * alpha + 1 * (1 - alpha)
 
-        self.imgs_in = torch.from_numpy(np.stack(self.imgs_in, axis=0))
-        self.imgs_out = torch.from_numpy(np.stack(self.imgs_out, axis=0))
+                imgs_in.append(img_in / 255)
+                imgs_out.append(img_out / 255)
+
+            self.imgs_in[s] = torch.stack([torch.from_numpy(x) for x in imgs_in]).to(device)
+            self.imgs_out[s] = torch.stack([torch.from_numpy(x) for x in imgs_out]).to(device)
 
     def dataloader(self, task):
         dataset = DenoiserDatasetSplit(self.imgs_in[task], self.imgs_out[task])
         loader = DataLoader(dataset,
             shuffle=(task == "train"),
-            batch_size=self.args.batch_size if task == "train" else 1, 
+            batch_size=1, 
             num_workers=0)
         return loader

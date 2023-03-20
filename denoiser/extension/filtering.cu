@@ -63,11 +63,11 @@ __global__ void applying(
     const int H,
     const int W,
     const int support,
-    const scalar_t* __restrict__ kernel_map,  // [B, H, W]
-    const scalar_t* __restrict__ imgs_in,     // [B, H, W, 3]
-    const scalar_t* __restrict__ max_map,     // [B, H, W]
-    scalar_t* rgb_sum,                        // [B, H, W, 3]
-    scalar_t* kernel_sum                      // [B, H, W]
+    const scalar_t* __restrict__ kernel_map,  // [H, W]
+    const scalar_t* __restrict__ imgs_in,     // [H, W, 3]
+    const scalar_t* __restrict__ max_map,     // [H, W]
+    scalar_t* rgb_sum,                        // [H, W, 3]
+    scalar_t* kernel_sum                      // [H, W]
 ) {
 
     // locate
@@ -107,10 +107,10 @@ __global__ void applying(
 template <typename scalar_t>
 __global__ void normalize(
     const int SIZE,
-    const scalar_t* __restrict__ weight_map,  // [B, H, W]
-    const scalar_t* __restrict__ rgb_sum,     // [B, H, W, 3]
-    const scalar_t* __restrict__ kernel_sum,  // [B, H, W]
-    scalar_t* imgs_out                        // [B, H, W, 3]
+    const scalar_t* __restrict__ weight_map,  // [H, W]
+    const scalar_t* __restrict__ rgb_sum,     // [H, W, 3]
+    const scalar_t* __restrict__ kernel_sum,  // [H, W]
+    scalar_t* imgs_out                        // [H, W, 3]
 ) {
 
     // locate
@@ -130,10 +130,10 @@ __global__ void normalize(
 template <typename scalar_t>
 __global__ void grad_weight_accumulate(
     const int SIZE,
-    const scalar_t* __restrict__ grad_output,  // [B, H, W, 3]
-    const scalar_t* __restrict__ weight_map,   // [B, H, W]
-    const scalar_t* __restrict__ rgb_sum_map,  // [B, H, W, 3]
-    scalar_t* grad_weight                      // [B, H, W]
+    const scalar_t* __restrict__ grad_output,  // [H, W, 3]
+    const scalar_t* __restrict__ weight_map,   // [H, W]
+    const scalar_t* __restrict__ rgb_sum_map,  // [H, W, 3]
+    scalar_t* grad_weight                      // [H, W]
 ) {
     // locate
     CUDA_GET_THREAD_ID(idx, SIZE);
@@ -146,7 +146,8 @@ __global__ void grad_weight_accumulate(
     grad += grad_output[0] * rgb_sum_map[0];
     grad += grad_output[1] * rgb_sum_map[1];
     grad += grad_output[2] * rgb_sum_map[2];
-    grad *= weight_map[0] * (1 - weight_map[0]);
+
+    // grad *= weight_map[0] * (1 - weight_map[0]); // Already softmax!
     // printf(
     //     "%d: %f %f %f %f %f %f %f %f %f\n",
     //     idx,
@@ -167,14 +168,14 @@ __global__ void grad_kernel_accumulate(
     const int H,
     const int W,
     const int support,
-    const scalar_t* __restrict__ grad_output,  // [B, H, W, 3]
-    const scalar_t* __restrict__ imgs_in,      // [B, H, W, 3]
-    const scalar_t* __restrict__ weight_map,   // [B, H, W]
-    const scalar_t* __restrict__ rgb_sum_map,  // [B, H, W, 3]
-    const scalar_t* __restrict__ kernel_map,   // [B, H, W]
-    const scalar_t* __restrict__ max_map,      // [B, H, W]
-    const scalar_t* __restrict__ kernel_sum,   // [B, H, W]
-    scalar_t* grad_kernel                      // [B, H, W]
+    const scalar_t* __restrict__ grad_output,  // [H, W, 3]
+    const scalar_t* __restrict__ imgs_in,      // [H, W, 3]
+    const scalar_t* __restrict__ weight_map,   // [H, W]
+    const scalar_t* __restrict__ rgb_sum_map,  // [H, W, 3]
+    const scalar_t* __restrict__ kernel_map,   // [H, W]
+    const scalar_t* __restrict__ max_map,      // [H, W]
+    const scalar_t* __restrict__ kernel_sum,   // [H, W]
+    scalar_t* grad_kernel                      // [H, W]
 ) {
     // locate
     const int K      = 1 + (support << 1);
@@ -222,16 +223,20 @@ public:
 
     // forward
     static torch::Tensor forward(
+        // clang-format off
         torch::autograd::AutogradContext* ctx,
-        torch::Tensor input,     // [B, H, W, L * 2], will be in-place modified
-        torch::Tensor imgs_in,   // [B, H, W, 3]
-        torch::Tensor imgs_out,  // [B, H, W, 3]
+        // clang-format on
+        torch::Tensor weight_map,  // [L, H, W]
+        torch::Tensor kernel_map,  // [L, H, W]
+        torch::Tensor imgs_in,     // [H, W, 3]
+        torch::Tensor imgs_out,    // [H, W, 3]
         bool          requires_grad) {
-        const int B    = input.size(0);
-        const int H    = input.size(1);
-        const int W    = input.size(2);
-        const int L    = input.size(3) >> 1;
-        const int SIZE = B * H * W;
+
+        const int L    = kernel_map.size(0);
+        const int H    = kernel_map.size(1);
+        const int W    = kernel_map.size(2);
+        const int SIZE = H * W;
+        // std::cout << L << " " << H << " " << W << std::endl;
 
         // init
         cudaStream_t stream        = at::cuda::getCurrentCUDAStream();
@@ -242,26 +247,30 @@ public:
                                    imgs_out.dtype())));
         
 
-        // weight normalization
-        const int weights_softmax_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-            input.type(), "forward_weights_softmax", ([&] {
-                kernel::weights_softmax<scalar_t>
-                    <<<weights_softmax_blocks, N_THREADS, 0, stream>>>(
-                        SIZE, L, input.data_ptr<scalar_t>());
-            }));
-        // permute
-        input = input.permute({3, 0, 1, 2}).contiguous();  // [L * 2, B, H, W]
+        // // weight normalization
+        // const int weights_softmax_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
+        // AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+        //     kernel_map.type(), "forward_weights_softmax", ([&] {
+        //         kernel::weights_softmax<scalar_t>
+        //             <<<weights_softmax_blocks, N_THREADS, 0, stream>>>(
+        //                 SIZE, L, input.data_ptr<scalar_t>());
+        //     }));
+        // // permute
+        // input = input.permute({3, 0, 1, 2}).contiguous();  // [L * 2, H, W]
 
         // variables to save
         auto save = torch::autograd::variable_list{};
         if (requires_grad) {
             // std::cout << "save context" << std::endl;
-            save.resize(2 + L * 3);
-            save[0] = input;
-            save[1] = imgs_in;
+            save.resize((L + 1) * 3);
+            save[0] = weight_map;
+            save[1] = kernel_map;
+            save[2] = imgs_in;
         }
 
+        // std::cout << "all kernel_map.sizes()" << kernel_map.sizes() << std::endl;
+        // std::cout << "all kernel_map.data_ptr()"
+        //           << (uint64_t)kernel_map.data_ptr<float>() << std::endl;
         // applying & fusing
         for (int level = 0; level < L; level++) {
             accumulate_one_level(
@@ -272,14 +281,14 @@ public:
                 H,
                 W,
                 L,
-                input.index({(level << 1)}),      // weight map
-                input.index({(level << 1) + 1}),  // kernel map
+                weight_map.index({level}),  // weight map
+                kernel_map.index({level}),  // kernel map
                 imgs_in,
                 imgs_out);
         }
 
         ctx->save_for_backward(save);
-        return imgs_out;  // [B, H, W, 3]
+        return imgs_out;  // [H, W, 3]
     }
 
     static void accumulate_one_level(
@@ -292,10 +301,10 @@ public:
         const int     H,
         const int     W,
         const int     L,
-        torch::Tensor weight_map,  // [B, H, W]
-        torch::Tensor kernel_map,  // [B, H, W]
-        torch::Tensor imgs_in,     // [B, H, W, 3]
-        torch::Tensor imgs_out     // [B, H, W, 3]
+        torch::Tensor weight_map,  // [H, W]
+        torch::Tensor kernel_map,  // [H, W]
+        torch::Tensor imgs_in,     // [H, W, 3]
+        torch::Tensor imgs_out     // [H, W, 3]
     ) {
 
         // kernel size
@@ -304,17 +313,21 @@ public:
         const int K_SIZE  = K * K;
 
         // use max pooling to find maximum value in the kernel
-        // max_map [B, H, W]
         namespace F = torch::nn::functional;
+        // std::cout << "kernel_map.sizes()"
+        //           << kernel_map.sizes() << std::endl;
+        // std::cout << "kernel_map.data_ptr()"
+        //           << (uint64_t)kernel_map.data_ptr<float>() << std::endl;
+        // std::cout << "kernel_map.unsqueeze(0)" << kernel_map.unsqueeze(0).sizes()
+        //           << std::endl;
         auto max_map = F::max_pool2d(
-            kernel_map, F::MaxPool2dFuncOptions(K).padding(support).stride(1));
+            kernel_map.unsqueeze(0),
+            F::MaxPool2dFuncOptions(K).padding(support).stride(1));
+        max_map = max_map.squeeze(0); // [H, W]
 
         // buffer
-        torch::TensorOptions tensor_options = torch::TensorOptions()
-                                                  .dtype(kernel_map.dtype())
-                                                  .device(torch::kCUDA);
-        auto rgb_sum    = torch::zeros_like(imgs_out, tensor_options);
-        auto kernel_sum = torch::zeros_like(max_map, tensor_options);
+        auto rgb_sum    = torch::zeros_like(imgs_out);
+        auto kernel_sum = torch::zeros_like(max_map);
 
         // apply kernel
         const int applying_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
@@ -352,7 +365,7 @@ public:
 
         // save tensors
         if (!save.empty()) {
-            int&& idx     = 2 + level * 3;
+            int&& idx     = (level + 1) * 3;
             save[idx]     = rgb_sum.div_(kernel_sum.unsqueeze(-1));
             save[idx + 1] = max_map;
             save[idx + 2] = kernel_sum;
@@ -364,27 +377,26 @@ public:
         torch::autograd::tensor_list      grad_outputs  
     ) {
         auto saved       = ctx->get_saved_variables();
-        auto input       = saved[0];  // [L * 2, B, H, W], permuted
-        auto imgs_in     = saved[1];  // [B, H, W, 3]
-        auto grad_output = grad_outputs[0].contiguous();  // [B, H, W, 3]
+        auto weight_map  = saved[0];  // [L, H, W]
+        auto kernel_map  = saved[1];  // [L, H, W]
+        auto imgs_in     = saved[2];  // [H, W, 3]
+        auto grad_output = grad_outputs[0].contiguous();  // [H, W, 3]
 
         // get dimensions
-        const int B    = input.size(1);
-        const int H    = input.size(2);
-        const int W    = input.size(3);
-        const int L    = input.size(0) >> 1;
-        const int SIZE = B * H * W;
+        const int L    = kernel_map.size(0);
+        const int H    = kernel_map.size(1);
+        const int W    = kernel_map.size(2);
+        const int SIZE = H * W;
 
         // create buffer
-        torch::TensorOptions tensor_options =
-            torch::TensorOptions().dtype(input.dtype()).device(torch::kCUDA);
-        auto grad_input = torch::zeros_like(input, tensor_options);
+        auto grad_weight = torch::zeros_like(weight_map);
+        auto grad_kernel = torch::zeros_like(kernel_map);
         // std::cout << "grad_input" << grad_input << std::endl;
 
         // accumulate grads for each level
         cudaStream_t stream = at::cuda::getCurrentCUDAStream();
         for (int level = 0; level < L; level++) {
-            int&& save_idx = 2 + level * 3;
+            int&& save_idx = (level + 1) * 3;
             grad_accumulate_one_level(
                 stream,
                 level,
@@ -394,19 +406,23 @@ public:
                 L,
                 grad_output,
                 imgs_in,
-                saved[save_idx],                      // rgb_sum_map
-                saved[save_idx + 1],                  // max_map
-                saved[save_idx + 2],                  // kernel_sum
-                input.index({(level << 1)}),          // weight_map
-                input.index({(level << 1) + 1}),      // kernel_map
-                grad_input.index({(level << 1)}),     // grad_weight
-                grad_input.index({(level << 1) + 1})  // grad_kernel
+                saved[save_idx],             // rgb_sum_map
+                saved[save_idx + 1],         // max_map
+                saved[save_idx + 2],         // kernel_sum
+                weight_map.index({level}),   // weight_map
+                kernel_map.index({level}),   // kernel_map
+                grad_weight.index({level}),  // grad_weight
+                grad_kernel.index({level})   // grad_kernel
             );
         }
 
-        grad_input =
-            grad_input.permute({1, 2, 3, 0}).contiguous();  // [B, H, W, 3]
-        return {grad_input, torch::Tensor(), torch::Tensor()};
+        return {
+            grad_weight,
+            grad_kernel,
+            torch::Tensor(),
+            torch::Tensor(),
+            torch::Tensor(),
+        };
     }
 
     static void grad_accumulate_one_level(
@@ -416,15 +432,15 @@ public:
         const int     H,
         const int     W,
         const int     L,
-        torch::Tensor grad_output,  // [B, H, W, 3]
-        torch::Tensor imgs_in,      // [B, H, W, 3]
-        torch::Tensor rgb_sum_map,  // [B, H, W, 3]
-        torch::Tensor max_map,      // [B, H, W]
-        torch::Tensor kernel_sum,   // [B, H, W]
-        torch::Tensor weight_map,   // [B, H, W]
-        torch::Tensor kernel_map,   // [B, H, W]
-        torch::Tensor grad_weight,  // [B, H, W]
-        torch::Tensor grad_kernel   // [B, H, W]
+        torch::Tensor grad_output,  // [H, W, 3]
+        torch::Tensor imgs_in,      // [H, W, 3]
+        torch::Tensor rgb_sum_map,  // [H, W, 3]
+        torch::Tensor max_map,      // [H, W]
+        torch::Tensor kernel_sum,   // [H, W]
+        torch::Tensor weight_map,   // [H, W]
+        torch::Tensor kernel_map,   // [H, W]
+        torch::Tensor grad_weight,  // [H, W]
+        torch::Tensor grad_kernel   // [H, W]
     ) {
         // std::cout << "grad_weight" << grad_weight << std::endl;
 
@@ -489,11 +505,13 @@ public:
 };
 
 torch::Tensor filtering(
-    torch::Tensor input,     // [B, H, W, L * 2]
-    torch::Tensor imgs_in,   // [B, H, W, 3]
-    torch::Tensor imgs_out,  // [B, H, W, 3]
+    torch::Tensor weight_map,  // [L, H, W]
+    torch::Tensor kernel_map,  // [L, H, W]
+    torch::Tensor imgs_in,     // [H, W, 3]
+    torch::Tensor imgs_out,    // [H, W, 3]
     bool          requires_grad) {
-    return Filtering::apply(input, imgs_in, imgs_out, requires_grad);
+    return Filtering::apply(
+        weight_map, kernel_map, imgs_in, imgs_out, requires_grad);
 }
 
 }  // namespace denoiser

@@ -5,7 +5,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "filtering",
         &denoiser::filtering,
         "Autograd filtering (CUDA)",
-        py::arg("input"),
+        py::arg("weight_map"),
+        py::arg("kernel_map"),
         py::arg("imgs_in"),
         py::arg("imgs_out"),
         py::arg("requires_grad") = false);

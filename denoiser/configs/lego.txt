@@ -1,0 +1,13 @@
+logs_root = ./logs
+exp_name = lego
+data_dir = ./data/nerf_synthetic/lego
+use_wandb = false
+
+lr = 5e-4
+epochs = 2000
+
+in_channels = 3
+mid_channels = 14
+num_layers = 3
+kernel_levels = 6
+loss_fn = mse
