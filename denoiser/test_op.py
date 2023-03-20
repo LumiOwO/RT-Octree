@@ -69,9 +69,8 @@ def main(args):
         imgs_out = model.forward(imgs_in, requires_grad=True)
         loss = imgs_out.sum()
         loss.backward()
-    
+
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
-        
     # print(imgs_in.permute(0, 3, 1, 2))
     # print(imgs_out.permute(0, 3, 1, 2))
     # loss = imgs_out.sum()

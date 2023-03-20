@@ -48,13 +48,16 @@ class DenoiserDataset():
                     os.path.join(args.data_dir, s, name + ".png")).astype(np.float32)
 
                 # preprocess channels
+                img_in /= 255
+                img_out /= 255
                 img_in = img_in[..., :3]
                 if img_out.shape[-1] == 4:
                     alpha = img_out[..., :-1]
                     img_out = img_out[..., :3] * alpha + 1 * (1 - alpha)
 
-                imgs_in.append(img_in / 255)
-                imgs_out.append(img_out / 255)
+                imgs_in.append(img_in)
+                imgs_out.append(img_out)
+
 
             self.imgs_in[s] = torch.stack([torch.from_numpy(x) for x in imgs_in]).to(device)
             self.imgs_out[s] = torch.stack([torch.from_numpy(x) for x in imgs_out]).to(device)

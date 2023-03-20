@@ -66,14 +66,10 @@ if __name__ == "__main__":
                         help="frequency of console printout and metric loggin")
     parser.add_argument("--i_print",   type=int, default=100, 
                         help="frequency of console printout and metric loggin")
-    parser.add_argument("--i_img",     type=int, default=500, 
-                        help="frequency of tensorboard image logging")
-    parser.add_argument("--i_weights", type=int, default=10000, 
+    parser.add_argument("--i_save", type=int, default=10000, 
                         help="frequency of weight ckpt saving")
-    parser.add_argument("--i_testset", type=int, default=50000, 
+    parser.add_argument("--i_test", type=int, default=50000, 
                         help="frequency of testset saving")
-    parser.add_argument("--i_video",   type=int, default=50000, 
-                        help="frequency of render_poses video saving")
 
     # training options
     parser.add_argument("--in_channels", type=int, default=8, 
@@ -179,7 +175,6 @@ if __name__ == "__main__":
     parser.add_argument("--llffhold", type=int, default=8, 
                         help="will take every 1/N images as LLFF test set, paper uses 8")
 
-    
 
     # args preprocess
     args = parser.parse_args()
