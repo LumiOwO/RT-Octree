@@ -99,9 +99,8 @@ class DenoiserNetwork(nn.Module):
 
         # kernel reconstruction and apply
         imgs_in = imgs_in.squeeze(0) # [H, W, 3]
-        imgs_out = torch.zeros_like(imgs_in) # [H, W, 3]
         imgs_out = _denoiser.filtering(
-            weight_map, kernel_map, imgs_in, imgs_out, requires_grad=requires_grad)
+            weight_map, kernel_map, imgs_in, requires_grad=requires_grad)
         return imgs_out
 
 

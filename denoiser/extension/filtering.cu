@@ -229,7 +229,6 @@ public:
         torch::Tensor weight_map,  // [L, H, W]
         torch::Tensor kernel_map,  // [L, H, W]
         torch::Tensor imgs_in,     // [H, W, 3]
-        torch::Tensor imgs_out,    // [H, W, 3]
         bool          requires_grad) {
 
         const int L    = kernel_map.size(0);
@@ -237,15 +236,9 @@ public:
         const int W    = kernel_map.size(2);
         const int SIZE = H * W;
         // std::cout << L << " " << H << " " << W << std::endl;
+        // std::cout << (uint64_t)imgs_out.data_ptr() << std::endl;
 
-        // init
-        cudaStream_t stream        = at::cuda::getCurrentCUDAStream();
-        cudaMemset(
-            imgs_out.data_ptr(),
-            0,
-            imgs_out.numel() * torch::elementSize(torch::typeMetaToScalarType(
-                                   imgs_out.dtype())));
-        
+        auto imgs_out = torch::zeros_like(imgs_in);  // [H, W, 3]
 
         // // weight normalization
         // const int weights_softmax_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
@@ -272,6 +265,7 @@ public:
         // std::cout << "all kernel_map.data_ptr()"
         //           << (uint64_t)kernel_map.data_ptr<float>() << std::endl;
         // applying & fusing
+        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
         for (int level = 0; level < L; level++) {
             accumulate_one_level(
                 save,
@@ -288,7 +282,8 @@ public:
         }
 
         ctx->save_for_backward(save);
-        return imgs_out;  // [H, W, 3]
+        // std::cout << (uint64_t)imgs_out.data_ptr() << std::endl;
+        return imgs_out;
     }
 
     static void accumulate_one_level(
@@ -421,7 +416,6 @@ public:
             grad_kernel,
             torch::Tensor(),
             torch::Tensor(),
-            torch::Tensor(),
         };
     }
 
@@ -508,10 +502,9 @@ torch::Tensor filtering(
     torch::Tensor weight_map,  // [L, H, W]
     torch::Tensor kernel_map,  // [L, H, W]
     torch::Tensor imgs_in,     // [H, W, 3]
-    torch::Tensor imgs_out,    // [H, W, 3]
     bool          requires_grad) {
     return Filtering::apply(
-        weight_map, kernel_map, imgs_in, imgs_out, requires_grad);
+        weight_map, kernel_map, imgs_in, requires_grad);
 }
 
 }  // namespace denoiser

@@ -16,7 +16,7 @@ class Runner(object):
         self.optimizer_fn = lambda model: torch.optim.Adam(model.parameters(), 
                 lr=self.args.lr, betas=(0.9, 0.999), weight_decay=5e-4)
         self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.LambdaLR(
-                optimizer, lambda epoch: 0.1 ** min(epoch / self.args.epochs, 1))
+                optimizer, lambda epoch: 0.1 ** min(epoch / (self.args.epochs + 1), 1))
         if args.loss_fn == "mse":
             self.loss_fn = torch.nn.MSELoss()
         else:
@@ -72,7 +72,7 @@ class Runner(object):
         if epoch % self.args.i_save == 0:
             path = os.path.join(self.args.work_dir, f"checkpoint_{epoch:06d}.tar")
             torch.save({
-                "epoch": epoch,
+                "epoch": epoch + 1,
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
