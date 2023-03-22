@@ -88,13 +88,18 @@ def main():
     # approximations and returns True if they all verify this condition.
     H = 25
     W = 25
-    L = 2
-    weight_map = torch.rand((L, H, W), dtype=torch.float32).to(device)
-    kernel_map = torch.rand((L, H, W), dtype=torch.float32).to(device)
-    imgs_in = torch.rand((H, W, 3), dtype=torch.float32).to(device)
-    for j in range(H):
-        imgs_in[j] = j
-    imgs_out = torch.zeros((H, W, 3), dtype=torch.float32).to(device)
+    L = 6
+    B = 1
+    weight_map = torch.rand((L, B, H, W), dtype=torch.float64).to(device)
+    kernel_map = torch.rand((L, B, H, W), dtype=torch.float64).to(device)
+    imgs_in = torch.rand((B, H, W, 3), dtype=torch.float64).to(device)
+    # for b in range(B):
+    #     for h in range(H):
+    #         for w in range(W):
+    #             for c in range(3):
+    #                 imgs_in[b][h][w][c] = c
+    print(imgs_in)
+    imgs_out = torch.zeros((B, H, W, 3), dtype=torch.float64).to(device)
     weight_map.requires_grad = True
     kernel_map.requires_grad = True
 
@@ -127,7 +132,7 @@ def main():
     print(imgs_in.requires_grad)
     print(imgs_out.requires_grad)
 
-    numerical_jacobian = get_numerical_jacobian(f, (weight_map, kernel_map, imgs_in), eps=1e-1)
+    numerical_jacobian = get_numerical_jacobian(f, (weight_map, kernel_map, imgs_in), eps=1e-4)
     analytical_jacobian = get_analytical_jacobian((weight_map, kernel_map, imgs_in), imgs_out)
     print(numerical_jacobian[0])
     print(analytical_jacobian[0][0])

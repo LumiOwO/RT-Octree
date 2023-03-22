@@ -4,10 +4,10 @@ data_dir = ./data/nerf_synthetic/lego
 use_wandb = false
 
 lr = 0.01
-epochs = 200
+epochs = 2000
 i_print = 1
 i_save = 200
-i_test = 5
+i_test = 200
 
 in_channels = 3
 mid_channels = 14

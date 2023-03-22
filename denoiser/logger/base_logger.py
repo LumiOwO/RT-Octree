@@ -15,5 +15,5 @@ class BaseLogger():
         self.print(json.dumps(logs_dict))
 
     def log_image(self, image, path, name):
-        # image: [H, W, C]
-        torchvision.utils.save_image(image.permute(2, 0, 1), os.path.join(path, name))
+        # image: [B, H, W, C]
+        torchvision.utils.save_image(image.permute(0, 3, 1, 2), os.path.join(path, name))

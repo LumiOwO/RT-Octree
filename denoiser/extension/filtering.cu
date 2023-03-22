@@ -63,11 +63,11 @@ __global__ void applying(
     const int H,
     const int W,
     const int support,
-    const scalar_t* __restrict__ kernel_map,  // [H, W]
-    const scalar_t* __restrict__ imgs_in,     // [H, W, 3]
-    const scalar_t* __restrict__ max_map,     // [H, W]
-    scalar_t* rgb_sum,                        // [H, W, 3]
-    scalar_t* kernel_sum                      // [H, W]
+    const scalar_t* __restrict__ kernel_map,  // [B, H, W]
+    const scalar_t* __restrict__ imgs_in,     // [B, H, W, 3]
+    const scalar_t* __restrict__ max_map,     // [B, H, W]
+    scalar_t* rgb_sum,                        // [B, H, W, 3]
+    scalar_t* kernel_sum                      // [B, H, W]
 ) {
 
     // locate
@@ -107,10 +107,10 @@ __global__ void applying(
 template <typename scalar_t>
 __global__ void normalize(
     const int SIZE,
-    const scalar_t* __restrict__ weight_map,  // [H, W]
-    const scalar_t* __restrict__ rgb_sum,     // [H, W, 3]
-    const scalar_t* __restrict__ kernel_sum,  // [H, W]
-    scalar_t* imgs_out                        // [H, W, 3]
+    const scalar_t* __restrict__ weight_map,  // [B, H, W]
+    const scalar_t* __restrict__ rgb_sum,     // [B, H, W, 3]
+    const scalar_t* __restrict__ kernel_sum,  // [B, H, W]
+    scalar_t* imgs_out                        // [B, H, W, 3]
 ) {
 
     // locate
@@ -130,10 +130,10 @@ __global__ void normalize(
 template <typename scalar_t>
 __global__ void grad_weight_accumulate(
     const int SIZE,
-    const scalar_t* __restrict__ grad_output,  // [H, W, 3]
-    const scalar_t* __restrict__ weight_map,   // [H, W]
-    const scalar_t* __restrict__ rgb_sum_map,  // [H, W, 3]
-    scalar_t* grad_weight                      // [H, W]
+    const scalar_t* __restrict__ grad_output,  // [B, H, W, 3]
+    const scalar_t* __restrict__ weight_map,   // [B, H, W]
+    const scalar_t* __restrict__ rgb_sum_map,  // [B, H, W, 3]
+    scalar_t* grad_weight                      // [B, H, W]
 ) {
     // locate
     CUDA_GET_THREAD_ID(idx, SIZE);
@@ -168,14 +168,14 @@ __global__ void grad_kernel_accumulate(
     const int H,
     const int W,
     const int support,
-    const scalar_t* __restrict__ grad_output,  // [H, W, 3]
-    const scalar_t* __restrict__ imgs_in,      // [H, W, 3]
-    const scalar_t* __restrict__ weight_map,   // [H, W]
-    const scalar_t* __restrict__ rgb_sum_map,  // [H, W, 3]
-    const scalar_t* __restrict__ kernel_map,   // [H, W]
-    const scalar_t* __restrict__ max_map,      // [H, W]
-    const scalar_t* __restrict__ kernel_sum,   // [H, W]
-    scalar_t* grad_kernel                      // [H, W]
+    const scalar_t* __restrict__ grad_output,  // [B, H, W, 3]
+    const scalar_t* __restrict__ imgs_in,      // [B, H, W, 3]
+    const scalar_t* __restrict__ weight_map,   // [B, H, W]
+    const scalar_t* __restrict__ rgb_sum_map,  // [B, H, W, 3]
+    const scalar_t* __restrict__ kernel_map,   // [B, H, W]
+    const scalar_t* __restrict__ max_map,      // [B, H, W]
+    const scalar_t* __restrict__ kernel_sum,   // [B, H, W]
+    scalar_t* grad_kernel                      // [B, H, W]
 ) {
     // locate
     const int K      = 1 + (support << 1);
@@ -226,19 +226,20 @@ public:
         // clang-format off
         torch::autograd::AutogradContext* ctx,
         // clang-format on
-        torch::Tensor weight_map,  // [L, H, W]
-        torch::Tensor kernel_map,  // [L, H, W]
-        torch::Tensor imgs_in,     // [H, W, 3]
+        torch::Tensor weight_map,  // [L, B, H, W]
+        torch::Tensor kernel_map,  // [L, B, H, W]
+        torch::Tensor imgs_in,     // [B, H, W, 3]
         bool          requires_grad) {
 
         const int L    = kernel_map.size(0);
-        const int H    = kernel_map.size(1);
-        const int W    = kernel_map.size(2);
-        const int SIZE = H * W;
+        const int B    = kernel_map.size(1);
+        const int H    = kernel_map.size(2);
+        const int W    = kernel_map.size(3);
+        const int SIZE = B * H * W;
         // std::cout << L << " " << H << " " << W << std::endl;
         // std::cout << (uint64_t)imgs_out.data_ptr() << std::endl;
 
-        auto imgs_out = torch::zeros_like(imgs_in);  // [H, W, 3]
+        auto imgs_out = torch::zeros_like(imgs_in);  // [B, H, W, 3]
 
         // // weight normalization
         // const int weights_softmax_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
@@ -296,10 +297,10 @@ public:
         const int     H,
         const int     W,
         const int     L,
-        torch::Tensor weight_map,  // [H, W]
-        torch::Tensor kernel_map,  // [H, W]
-        torch::Tensor imgs_in,     // [H, W, 3]
-        torch::Tensor imgs_out     // [H, W, 3]
+        torch::Tensor weight_map,  // [B, H, W]
+        torch::Tensor kernel_map,  // [B, H, W]
+        torch::Tensor imgs_in,     // [B, H, W, 3]
+        torch::Tensor imgs_out     // [B, H, W, 3]
     ) {
 
         // kernel size
@@ -316,9 +317,9 @@ public:
         // std::cout << "kernel_map.unsqueeze(0)" << kernel_map.unsqueeze(0).sizes()
         //           << std::endl;
         auto max_map = F::max_pool2d(
-            kernel_map.unsqueeze(0),
+            kernel_map,
             F::MaxPool2dFuncOptions(K).padding(support).stride(1));
-        max_map = max_map.squeeze(0); // [H, W]
+        max_map = max_map.squeeze(0);  // [B, H, W]
 
         // buffer
         auto rgb_sum    = torch::zeros_like(imgs_out);
@@ -372,16 +373,17 @@ public:
         torch::autograd::tensor_list      grad_outputs  
     ) {
         auto saved       = ctx->get_saved_variables();
-        auto weight_map  = saved[0];  // [L, H, W]
-        auto kernel_map  = saved[1];  // [L, H, W]
-        auto imgs_in     = saved[2];  // [H, W, 3]
-        auto grad_output = grad_outputs[0].contiguous();  // [H, W, 3]
+        auto weight_map  = saved[0];  // [L, B, H, W]
+        auto kernel_map  = saved[1];  // [L, B, H, W]
+        auto imgs_in     = saved[2];  // [B, H, W, 3]
+        auto grad_output = grad_outputs[0].contiguous();  // [B, H, W, 3]
 
         // get dimensions
         const int L    = kernel_map.size(0);
-        const int H    = kernel_map.size(1);
-        const int W    = kernel_map.size(2);
-        const int SIZE = H * W;
+        const int B    = kernel_map.size(1);
+        const int H    = kernel_map.size(2);
+        const int W    = kernel_map.size(3);
+        const int SIZE = B * H * W;
 
         // create buffer
         auto grad_weight = torch::zeros_like(weight_map);
@@ -426,15 +428,15 @@ public:
         const int     H,
         const int     W,
         const int     L,
-        torch::Tensor grad_output,  // [H, W, 3]
-        torch::Tensor imgs_in,      // [H, W, 3]
-        torch::Tensor rgb_sum_map,  // [H, W, 3]
-        torch::Tensor max_map,      // [H, W]
-        torch::Tensor kernel_sum,   // [H, W]
-        torch::Tensor weight_map,   // [H, W]
-        torch::Tensor kernel_map,   // [H, W]
-        torch::Tensor grad_weight,  // [H, W]
-        torch::Tensor grad_kernel   // [H, W]
+        torch::Tensor grad_output,  // [B, H, W, 3]
+        torch::Tensor imgs_in,      // [B, H, W, 3]
+        torch::Tensor rgb_sum_map,  // [B, H, W, 3]
+        torch::Tensor max_map,      // [B, H, W]
+        torch::Tensor kernel_sum,   // [B, H, W]
+        torch::Tensor weight_map,   // [B, H, W]
+        torch::Tensor kernel_map,   // [B, H, W]
+        torch::Tensor grad_weight,  // [B, H, W]
+        torch::Tensor grad_kernel   // [B, H, W]
     ) {
         // std::cout << "grad_weight" << grad_weight << std::endl;
 
@@ -499,9 +501,9 @@ public:
 };
 
 torch::Tensor filtering(
-    torch::Tensor weight_map,  // [L, H, W]
-    torch::Tensor kernel_map,  // [L, H, W]
-    torch::Tensor imgs_in,     // [H, W, 3]
+    torch::Tensor weight_map,  // [L, B, H, W]
+    torch::Tensor kernel_map,  // [L, B, H, W]
+    torch::Tensor imgs_in,     // [B, H, W, 3]
     bool          requires_grad) {
     return Filtering::apply(
         weight_map, kernel_map, imgs_in, requires_grad);

@@ -82,23 +82,26 @@ class DenoiserNetwork(nn.Module):
         self.kernel_layer = RepVGG(mid_channels, kernel_levels)
 
     def forward(self, imgs_in, requires_grad=False):
-        # Only support B == 1
-
         # kernel prediction
         x = imgs_in.permute(0, 3, 1, 2).contiguous() # [B, 3, H, W]
         for layer in self.layers:
             x = layer(x)
 
         weight_map = self.weight_layer(x) # [B, L, H, W]
-        weight_map = weight_map.squeeze(0) # [L, H, W]
-        # softmax for weight_map
-        weight_map = F.softmax(weight_map, dim=0)
+        weight_map = F.softmax(weight_map, dim=1)
+        B, L, H, W = weight_map.shape
+        if B == 1:
+            weight_map = weight_map.view(L, 1, H, W) # [L, B, H, W]
+        else:
+            weight_map = weight_map.permute(1, 0, 2, 3).contiguous() # [L, B, H, W]
 
         kernel_map = self.kernel_layer(x) # [B, L, H, W]
-        kernel_map = kernel_map.squeeze(0) # [L, H, W]
+        if B == 1:
+            kernel_map = kernel_map.view(L, 1, H, W) # [L, B, H, W]
+        else:
+            kernel_map = kernel_map.permute(1, 0, 2, 3).contiguous() # [L, B, H, W]
 
         # kernel reconstruction and apply
-        imgs_in = imgs_in.squeeze(0) # [H, W, 3]
         imgs_out = _denoiser.filtering(
             weight_map, kernel_map, imgs_in, requires_grad=requires_grad)
         return imgs_out

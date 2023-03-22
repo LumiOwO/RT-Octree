@@ -56,10 +56,9 @@ class Runner(object):
 
     def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler, epoch):
         for batch_idx, (imgs_in, imgs_gt) in enumerate(dataloader):
-            # batch_size == 1
             optimizer.zero_grad()
             imgs_out = model.forward(imgs_in, requires_grad=True)
-            loss = self.loss_fn(imgs_out, imgs_gt.squeeze(0))
+            loss = self.loss_fn(imgs_out, imgs_gt)
             loss.backward()
             optimizer.step()
             lr_scheduler.step()
@@ -100,7 +99,7 @@ class Runner(object):
         total_loss = 0
         for batch_idx, (imgs_in, imgs_gt) in enumerate(tqdm(dataloader)):
             imgs_out = model.forward(imgs_in)
-            loss = self.loss_fn(imgs_out, imgs_gt.squeeze(0))
+            loss = self.loss_fn(imgs_out, imgs_gt)
             total_loss += loss.item()
             self.logger.log_image(imgs_out, save_dir, f"r_{batch_idx}.png")
 

@@ -113,6 +113,6 @@ class DenoiserDataset():
         dataset = DenoiserDatasetSplit(self.imgs_in[task], self.imgs_out[task])
         loader = DataLoader(dataset,
             shuffle=(task == "train"),
-            batch_size=1, 
+            batch_size=(16 if task == "train" else 1), 
             num_workers=0)
         return loader
