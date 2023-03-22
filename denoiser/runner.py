@@ -4,6 +4,7 @@ import os
 from tqdm import tqdm, trange
 from denoiser.utils import load_checkpoint
 from denoiser.network import compact_and_compile
+from denoiser.metrics import psnr, smape
 
 class Runner(object):
     def __init__(self, args, dataset, logger, device=None):
@@ -19,8 +20,10 @@ class Runner(object):
                 optimizer, lambda epoch: 0.1 ** min(epoch / (self.args.epochs + 1), 1))
         if args.loss_fn == "mse":
             self.loss_fn = torch.nn.MSELoss()
+        elif args.loss_fn == "smape":
+            self.loss_fn = smape
         else:
-            raise NotImplementedError("Invalid task type.")
+            raise NotImplementedError("Invalid loss funtion.")
 
 
     def train(self, model):
@@ -65,7 +68,10 @@ class Runner(object):
 
         # log train loss
         if epoch % self.args.i_print == 0:
-            self.logger.log({"train/loss": loss.item()})
+            self.logger.log({
+                "train/epoch": epoch,
+                "train/loss": loss.item(),
+            })
 
         # save checkpoint
         if epoch % self.args.i_save == 0:
@@ -96,15 +102,22 @@ class Runner(object):
         # batch_size == 1 when testing
         save_dir = os.path.join(self.args.work_dir, save_dirname)
         os.makedirs(save_dir, exist_ok=True)
-        total_loss = 0
+        avg_loss = 0
+        avg_psnr = 0
         for batch_idx, (imgs_in, imgs_gt) in enumerate(tqdm(dataloader)):
             imgs_out = model.forward(imgs_in)
             loss = self.loss_fn(imgs_out, imgs_gt)
-            total_loss += loss.item()
+            avg_loss += loss.item()
+            avg_psnr += psnr(imgs_out, imgs_gt)
             self.logger.log_image(imgs_out, save_dir, f"r_{batch_idx}.png")
 
-        avg_loss = total_loss / len(dataloader)
-        self.logger.log({"test/loss": avg_loss})
+        size = len(dataloader)
+        avg_loss = avg_loss / size
+        avg_psnr = avg_psnr / size
+        self.logger.log({
+            "test/loss": avg_loss,
+            "test/psnr": avg_psnr,
+        })
 
     def compact(self, model):
         ckpt, ckpt_path = load_checkpoint(self.args.work_dir)
