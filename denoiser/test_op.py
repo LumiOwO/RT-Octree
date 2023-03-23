@@ -81,39 +81,46 @@ def main():
     # gradcheck takes a tuple of tensors as input, check if your gradient
     # evaluated with these tensors are close enough to numerical
     # approximations and returns True if they all verify this condition.
-    H = 800
-    W = 800
-    L = 6
-    B = 1
-    weight_map = torch.rand((L, B, H, W), dtype=torch.float32).to(device)
-    kernel_map = torch.rand((L, B, H, W), dtype=torch.float32).to(device)
-    imgs_in = torch.rand((B, H, W, 3), dtype=torch.float32).to(device)
-    # for b in range(B):
-    #     for h in range(H):
-    #         for w in range(W):
-    #             for c in range(3):
-    #                 imgs_in[b][h][w][c] = c
-    # print(imgs_in)
-    imgs_out = torch.zeros((B, H, W, 3), dtype=torch.float32).to(device)
-    weight_map.requires_grad = True
-    kernel_map.requires_grad = True
+    H = 5
+    W = 5
+    L = 2
+    # B = 1
+    weight_map = torch.rand((L, H, W), dtype=torch.float32).to(device)
+    kernel_map = torch.rand((L, H, W), dtype=torch.float32).to(device)
+    imgs_in = torch.rand((H, W, 4), dtype=torch.float32).to(device)
+    # for h in range(H):
+    #     imgs_in[h] = h + 1
+    imgs_out = torch.zeros((H, W, 4), dtype=torch.float32).to(device)
+    requires_grad = True
+    weight_map.requires_grad = requires_grad
+    kernel_map.requires_grad = requires_grad
 
     def f(inputs):
         weight_map, kernel_map, imgs_in = inputs
-        return _denoiser.filtering(weight_map, kernel_map, imgs_in, requires_grad=True)
+        return _denoiser.filtering(weight_map, kernel_map, imgs_in, requires_grad=requires_grad)
 
     # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]) as prof:
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-        imgs_out = f((weight_map, kernel_map, imgs_in))
+        for i in range(1):
+            imgs_out = f((weight_map, kernel_map, imgs_in))
+    print(imgs_in.permute(2, 0, 1))
+    print(imgs_out.permute(2, 0, 1))
     print(prof.key_averages().table(
         sort_by="self_cuda_time_total", row_limit=10))
 
-    # numerical_jacobian = get_numerical_jacobian(f, (weight_map, kernel_map, imgs_in), eps=1e-4)
-    # analytical_jacobian = get_analytical_jacobian((weight_map, kernel_map, imgs_in), imgs_out)
-    # print(numerical_jacobian[0])
-    # print(analytical_jacobian[0][0])
-    # print((numerical_jacobian[0] - analytical_jacobian[0][0]).abs().max())
-    # print((numerical_jacobian[1] - analytical_jacobian[0][1]).abs().max())
+    numerical_jacobian = get_numerical_jacobian(f, (weight_map, kernel_map, imgs_in), eps=1e-2)
+    analytical_jacobian = get_analytical_jacobian((weight_map, kernel_map, imgs_in), imgs_out)
+    torch.set_printoptions(edgeitems=7, linewidth=200)
+    print(numerical_jacobian[0])
+    print()
+    print(analytical_jacobian[0][0])
+    print()
+    print(numerical_jacobian[1])
+    print()
+    print(analytical_jacobian[0][1])
+    print()
+    print((numerical_jacobian[0] - analytical_jacobian[0][0]).abs().max())
+    print((numerical_jacobian[1] - analytical_jacobian[0][1]).abs().max())
 
 
 if __name__ == "__main__":
