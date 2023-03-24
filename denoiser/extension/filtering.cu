@@ -300,8 +300,8 @@ __global__ void grad_kernel_accumulate(
     const scalar_t& k   = _exp(kernel_map[0] - max_map[0]) * inv_kernel_sum[0];
     scalar_t res = 0;
     res += grad_output[0] * (imgs_in[0] - rgb_filtered[0]);
-    res += grad_output[1] * (imgs_in[0] - rgb_filtered[0]);
-    res += grad_output[2] * (imgs_in[0] - rgb_filtered[0]);
+    res += grad_output[1] * (imgs_in[1] - rgb_filtered[1]);
+    res += grad_output[2] * (imgs_in[2] - rgb_filtered[2]);
     res *= weight_map[0] * k;
     
     gpuAtomicAdd(&grad_kernel[0], res);
@@ -325,7 +325,7 @@ __global__ void grad_kernel_accumulate(
 
 #define __KERNEL_APPLY_SWITCH_H_W(STREAM, SUPPORT, H, W, ...)                 \
     {                                                                         \
-        constexpr int BLOCK_H = 32;                                           \
+        constexpr int BLOCK_H = 16;                                           \
         constexpr int BLOCK_W = 32;                                           \
         __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, __VA_ARGS__); \
     }                                                                         \
@@ -461,11 +461,20 @@ public:
             save[2] = imgs_in;
         }
 
-        // create texture object
+        // create imgs_in texture
         cudaArray_t imgs_in_cu;
         cudaTextureObject_t imgs_in_tex =
             create_texture_from_tensor<float4>(imgs_in_cu, H, W, imgs_in);
+        // create kernel texture
         auto kernel_cus = std::vector<cudaArray_t>{};
+        auto kernel_texs = std::vector<cudaTextureObject_t>{};
+        for (int level = 0; level < L; level++) {
+            cudaArray_t         kernel_cu;
+            cudaTextureObject_t kernel_tex = create_texture_from_tensor<float>(
+                kernel_cu, H, W, kernel_map.index({level}));
+            kernel_cus.emplace_back(kernel_cu);
+            kernel_texs.emplace_back(kernel_tex);
+        }
 
         // std::cout << "imgs_in_tex" << tex2D<float>(imgs_in_tex, 400 * 3 + .5f, 400.5f) << std::endl;
         // std::cout << "kernel_tex"
@@ -477,15 +486,14 @@ public:
         // applying & fusing
         auto stream = at::cuda::getCurrentCUDAStream();
         // auto streams = std::vector<at::cuda::CUDAStream>{};
+        // streams.emplace_back(at::cuda::getCurrentCUDAStream());
+        // streams.emplace_back(at::cuda::getStreamFromPool());
         // auto weight_cus = std::vector<cudaArray_t>{};
         for (int level = 0; level < L; level++) {
+            // get current stream
             // auto stream = at::cuda::getStreamFromPool();
             // streams.emplace_back(stream);
-
-            cudaArray_t         kernel_cu;
-            cudaTextureObject_t kernel_tex = create_texture_from_tensor<float>(
-                kernel_cu, H, W, kernel_map.index({level}));
-            kernel_cus.emplace_back(kernel_cu);
+            // auto stream = streams[level & 0x1];
 
             accumulate_one_level(
                 save,
@@ -495,7 +503,7 @@ public:
                 W,
                 L,
                 imgs_in_tex,
-                kernel_tex,
+                kernel_texs[level],
                 kernel_map.index({level}),
                 weight_map.index({level}),
                 imgs_out);
@@ -557,6 +565,7 @@ public:
         // kernel_map   = kernel_map.add(kernel_map);
         // std::cout << "kernel_map.sizes()" << kernel_map.sizes() << std::endl;
 
+        // std::cout << "stream" << (uint64_t)stream.stream() << std::endl;
         at::cuda::CUDAStreamGuard stream_guard(stream);
         namespace F  = torch::nn::functional;
         auto max_map = F::max_pool2d(
