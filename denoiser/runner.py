@@ -18,12 +18,16 @@ class Runner(object):
                 lr=self.args.lr, betas=(0.9, 0.999), weight_decay=5e-4)
         self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.LambdaLR(
                 optimizer, lambda epoch: 0.1 ** min(epoch / (self.args.epochs + 1), 1))
+        # self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.StepLR(
+        #         optimizer, step_size=30, gamma=0.1)
         if args.loss_fn == "mse":
             self.loss_fn = torch.nn.MSELoss()
         elif args.loss_fn == "smape":
             self.loss_fn = smape
         else:
             raise NotImplementedError("Invalid loss funtion.")
+
+        self.epoch = 0
 
 
     def train(self, model):
@@ -46,7 +50,8 @@ class Runner(object):
 
         # train
         for epoch in trange(start, self.args.epochs + 1):
-            self.train_one_epoch(model, dataloader, optimizer, lr_scheduler, epoch)
+            self.epoch = epoch
+            self.train_one_epoch(model, dataloader, optimizer, lr_scheduler)
 
             # run test set
             if epoch > start and epoch < self.args.epochs and epoch % self.args.i_test == 0:
@@ -57,27 +62,32 @@ class Runner(object):
         self.logger.print("Test after training")
         self.test(model, False)
 
-    def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler, epoch):
+    def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler):
+        avg_loss = 0
         for batch_idx, (buffers_in, imgs_gt) in enumerate(dataloader):
             optimizer.zero_grad(set_to_none=True)
             imgs_out = model.forward(buffers_in, requires_grad=True)
             loss = self.loss_fn(imgs_out[..., :3], imgs_gt[..., :3])
             loss.backward()
             optimizer.step()
-            lr_scheduler.step()
+            avg_loss += loss.item()
+
+        # update learning rate per epoch
+        lr_scheduler.step()
 
         # log train loss
-        if epoch % self.args.i_print == 0:
+        if self.epoch % self.args.i_print == 0:
             self.logger.log({
-                "train/epoch": epoch,
-                "train/loss": loss.item(),
+                "epoch": self.epoch,
+                "train/loss": avg_loss / len(dataloader),
+                "train/lr": optimizer.param_groups[0]["lr"],
             })
 
         # save checkpoint
-        if epoch % self.args.i_save == 0:
-            path = os.path.join(self.args.work_dir, f"checkpoint_{epoch:06d}.tar")
+        if self.epoch % self.args.i_save == 0:
+            path = os.path.join(self.args.work_dir, f"checkpoint_{self.epoch:06d}.tar")
             torch.save({
-                "epoch": epoch + 1,
+                "epoch": self.epoch + 1,
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
@@ -112,13 +122,14 @@ class Runner(object):
             loss = self.loss_fn(img_out[..., :3], imgs_gt[..., :3])
             avg_loss += loss.item()
             avg_psnr += psnr(img_out[..., :3], imgs_gt[..., :3])
-            self.logger.log_image(img_out, save_dir, "r", batch_idx)
+            self.logger.log_image(img_out, save_dir, "r", batch_idx, {"epoch": self.epoch})
 
 
         size = len(dataloader)
         avg_loss = avg_loss / size
         avg_psnr = avg_psnr / size
         self.logger.log({
+            "epoch": self.epoch,
             "test/loss": avg_loss,
             "test/psnr": avg_psnr,
         })
