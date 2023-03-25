@@ -10,3 +10,4 @@ zildNt3f
 .vscode
 __pycache__/
 logs*/
+wandb/

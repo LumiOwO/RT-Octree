@@ -106,13 +106,14 @@ class Runner(object):
         avg_psnr = 0
         for batch_idx, (buffers_in, imgs_gt) in enumerate(tqdm(dataloader)):
             # B == 1 in test
-            imgs_out = model.forward(buffers_in)
+            img_out = model.forward(buffers_in)
             # print(imgs_out.shape)
             # print(imgs_gt.shape)
-            loss = self.loss_fn(imgs_out[..., :3], imgs_gt[..., :3])
+            loss = self.loss_fn(img_out[..., :3], imgs_gt[..., :3])
             avg_loss += loss.item()
-            avg_psnr += psnr(imgs_out[..., :3], imgs_gt[..., :3])
-            self.logger.log_image(imgs_out, save_dir, f"r_{batch_idx}.png")
+            avg_psnr += psnr(img_out[..., :3], imgs_gt[..., :3])
+            self.logger.log_image(img_out, save_dir, "r", batch_idx)
+
 
         size = len(dataloader)
         avg_loss = avg_loss / size
