@@ -15,9 +15,9 @@ def main():
     assert device.type == "cuda", "CPU-only not supported."
 
     # # check filtering
-    # H = 35
-    # W = 35
-    # L = 6
+    # H = 5
+    # W = 5
+    # L = 2
     # # B = 1
     # weight_map = torch.rand((L, H, W), dtype=torch.float32).to(device)
     # kernel_map = torch.rand((L, H, W), dtype=torch.float32).to(device)
@@ -25,7 +25,7 @@ def main():
     # # for h in range(H):
     # #     imgs_in[h] = h + 1
     # imgs_out = torch.zeros((H, W, 4), dtype=torch.float32).to(device)
-    # requires_grad = True
+    # requires_grad = False
     # weight_map.requires_grad = requires_grad
     # kernel_map.requires_grad = requires_grad
 
@@ -38,24 +38,24 @@ def main():
     #     activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
     #     for i in range(1):
     #         imgs_out = f((weight_map, kernel_map, imgs_in))
-    # # print(imgs_in.permute(2, 0, 1))
-    # # print(imgs_out.permute(2, 0, 1))
+    # print(imgs_in.permute(2, 0, 1))
+    # print(imgs_out.permute(2, 0, 1))
     # print(prof.key_averages().table(
     #     sort_by="self_cuda_time_total", row_limit=10))
 
-    # numerical_jacobian = get_numerical_jacobian(f, (weight_map, kernel_map, imgs_in), eps=1e-2)
-    # analytical_jacobian = get_analytical_jacobian((weight_map, kernel_map, imgs_in), imgs_out)
-    # torch.set_printoptions(edgeitems=7, linewidth=200)
-    # # print(numerical_jacobian[0])
-    # # print()
-    # # print(analytical_jacobian[0][0])
-    # # print()
-    # # print(numerical_jacobian[1])
-    # # print()
-    # # print(analytical_jacobian[0][1])
-    # # print()
-    # print((numerical_jacobian[0] - analytical_jacobian[0][0]).abs().max())
-    # print((numerical_jacobian[1] - analytical_jacobian[0][1]).abs().max())
+    # # numerical_jacobian = get_numerical_jacobian(f, (weight_map, kernel_map, imgs_in), eps=1e-2)
+    # # analytical_jacobian = get_analytical_jacobian((weight_map, kernel_map, imgs_in), imgs_out)
+    # # torch.set_printoptions(edgeitems=7, linewidth=200)
+    # # # print(numerical_jacobian[0])
+    # # # print()
+    # # # print(analytical_jacobian[0][0])
+    # # # print()
+    # # # print(numerical_jacobian[1])
+    # # # print()
+    # # # print(analytical_jacobian[0][1])
+    # # # print()
+    # # print((numerical_jacobian[0] - analytical_jacobian[0][0]).abs().max())
+    # # print((numerical_jacobian[1] - analytical_jacobian[0][1]).abs().max())
 
     # check network
     H = 800

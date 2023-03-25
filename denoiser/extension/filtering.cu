@@ -73,9 +73,9 @@ __global__ void applying(
     cudaTextureObject_t imgs_in_tex,       // [H, W, 4]
     cudaTextureObject_t kernel_tex,        // [H, W, 4]
     const float* __restrict__ weight_map,  // [H, W]
-    const float* __restrict__ max_map,     // [H, W]
     float* imgs_out,                       // [H, W, 4]
     float* rgb_filtered,                   // [H, W, 4]
+    float* max_map,                        // [H, W]
     float* inv_kernel_sum                  // [H, W]
 ) {
     constexpr int SUPPORT2 = SUPPORT * 2;
@@ -91,7 +91,7 @@ __global__ void applying(
     // load tile elements
     __shared__ float4 rgba_tile[TILE_H][TILE_W];
     __shared__ float  kernel_tile[TILE_H][TILE_W];
-    // !!!!! values out of image is undefined !!!!!
+
 #define __LOAD(tile_x, tile_y, image_x, image_y)                    \
     do {                                                            \
         int _tx = (tile_x);                                         \
@@ -103,6 +103,9 @@ __global__ void applying(
                 tex2D<float4>(imgs_in_tex, _ix + 0.5f, _iy + 0.5f); \
             kernel_tile[_ty][_tx] =                                 \
                 tex2D<float>(kernel_tex, _ix + 0.5f, _iy + 0.5f);   \
+        } else {                                                    \
+            rgba_tile[_ty][_tx]   = float4{0, 0, 0, 0};             \
+            kernel_tile[_ty][_tx] = -FLT_MAX;                       \
         }                                                           \
     } while (0)
 
@@ -153,21 +156,26 @@ __global__ void applying(
     }
     const int idx = IMAD(iy, W, ix);
     weight_map += idx;
-    max_map    += idx;
     imgs_out   += (idx << 2);
+
+    float max_val = -FLT_MAX;
+    for (int dy = 0; dy <= SUPPORT2; dy++) {
+        for (int dx = 0; dx <= SUPPORT2; dx++) {
+            max_val = fmaxf(max_val, kernel_tile[ty + dy][tx + dx]);
+        }
+    }
 
     // apply
     float3 rgb = {0, 0, 0};
-    float max_val = max_map[0];
     float kernel_sum = 0;
     for (int dy = 0; dy <= SUPPORT2; dy++) {
-        int _iy = iy - SUPPORT + dy;
-        if (_iy < 0 || _iy >= H) continue;
+        // int _iy = iy - SUPPORT + dy;
+        // if (_iy < 0 || _iy >= H) continue;
         int _ty = ty + dy;
 
         for (int dx = 0; dx <= SUPPORT2; dx++) {
-            int _ix = ix - SUPPORT + dx;
-            if (_ix < 0 || _ix >= W) continue;
+            // int _ix = ix - SUPPORT + dx;
+            // if (_ix < 0 || _ix >= W) continue;
             int _tx = tx + dx;
 
             // compute
@@ -185,11 +193,17 @@ __global__ void applying(
     at::native::fastAtomicAdd(imgs_out, 0, 1, rgb.x * w, true);
     at::native::fastAtomicAdd(imgs_out, 1, 1, rgb.y * w, true);
     at::native::fastAtomicAdd(imgs_out, 2, 1, rgb.z * w, true);
+    // imgs_out[0] += rgb.x * w;
+    // imgs_out[1] += rgb.y * w;
+    // imgs_out[2] += rgb.z * w;
 
     // save for backward
     if (rgb_filtered != nullptr) {
         rgb_filtered   += idx * IMG_CHANNELS;
+        max_map += idx;
         inv_kernel_sum += idx;
+
+        max_map[0]        = max_val;
         inv_kernel_sum[0] = 1.0f / kernel_sum;
         rgb_filtered[0]   = rgb.x * inv_kernel_sum[0];
         rgb_filtered[1]   = rgb.y * inv_kernel_sum[0];
@@ -546,7 +560,7 @@ public:
 
         // kernel size
         const int support = level + 1;
-        const int K       = 1 + (support << 1);
+        // const int K       = 1 + (support << 1);
         // const int K_SIZE  = K * K;
 
         // use max pooling to find maximum value in the kernel
@@ -567,20 +581,22 @@ public:
 
         // std::cout << "stream" << (uint64_t)stream.stream() << std::endl;
         at::cuda::CUDAStreamGuard stream_guard(stream);
-        namespace F  = torch::nn::functional;
-        auto max_map = F::max_pool2d(
-            kernel_map.unsqueeze(0),  // [1, H, W]
-            F::MaxPool2dFuncOptions(K).padding(support).stride(1));
-        max_map = max_map.squeeze(0);  // [H, W]
+        // namespace F  = torch::nn::functional;
+        // auto max_map = F::max_pool2d(
+        //     kernel_map.unsqueeze(0),  // [1, H, W]
+        //     F::MaxPool2dFuncOptions(K).padding(support).stride(1));
+        // max_map = max_map.squeeze(0);  // [H, W]
         // std::cout << "max_map.sizes()" << max_map.sizes() << std::endl;
         // auto max_map = torch::ones_like(kernel_map);
 
         // tensors
-        bool need_save     = !save.empty();
-        auto rgb_filtered  = torch::Tensor();
+        bool need_save      = !save.empty();
+        auto rgb_filtered   = torch::Tensor();
+        auto max_map        = torch::Tensor();
         auto inv_kernel_sum = torch::Tensor();
         if (need_save) {
-            rgb_filtered = torch::zeros_like(imgs_out);
+            rgb_filtered   = torch::zeros_like(imgs_out);
+            max_map        = torch::zeros_like(kernel_map);
             inv_kernel_sum = torch::zeros_like(kernel_map);
         }
 
@@ -593,9 +609,9 @@ public:
             imgs_in_tex,
             kernel_tex,
             weight_map.data_ptr<float>(),
-            max_map.data_ptr<float>(),
             imgs_out.data_ptr<float>(),
             (need_save ? rgb_filtered.data_ptr<float>() : nullptr),
+            (need_save ? max_map.data_ptr<float>() : nullptr),
             (need_save ? inv_kernel_sum.data_ptr<float>() : nullptr));
 
         // const int applying_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
