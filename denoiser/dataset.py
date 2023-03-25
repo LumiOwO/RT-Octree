@@ -9,24 +9,22 @@ import torchvision
 from torch.utils.data import Dataset, DataLoader
 
 class DenoiserDatasetSplit(Dataset):
-    def __init__(self, imgs_in, imgs_out):
-        self.imgs_in = imgs_in
-        self.imgs_out = imgs_out
+    def __init__(self, buffers_in, imgs_gt):
+        self.buffers_in = buffers_in
+        self.imgs_gt = imgs_gt
 
     def __len__(self):
-        return len(self.imgs_in)
+        return len(self.buffers_in)
 
     def __getitem__(self, idx):
-        return self.imgs_in[idx], self.imgs_out[idx]
+        return self.buffers_in[idx], self.imgs_gt[idx]
 
 class DenoiserDataset():
     def __init__(self, args, device=None):
         self.args = args
         self.device = device
-
-        # load images
-        self.imgs_in = {}
-        self.imgs_out = {}
+        self.buffers_in = {}
+        self.imgs_gt = {}
 
         for s in ["train", "val", "test"]:
             if args.task == "test" and s != "test":
@@ -38,81 +36,105 @@ class DenoiserDataset():
             with open(os.path.join(args.data_dir, "transforms_{}.json".format(s)), "r") as fp:
                 meta = json.load(fp)
 
-            imgs_in = []
-            imgs_out = []
+            buffers_in_list = []
+            imgs_gt_list = []
             tqdm.write(f"Loading {s} set...")
             for frame in tqdm(meta["frames"]):
                 name = os.path.basename(frame["file_path"])
-                img_in = imageio.imread(
-                    os.path.join(args.data_dir, "spp_1", s, name + ".png")).astype(np.float32)
-                img_out = imageio.imread(
-                    os.path.join(args.data_dir, s, name + ".png")).astype(np.float32)
+                rgba = imageio.imread(
+                    os.path.join(args.data_dir, "spp_1", s, name + ".png"))
+                img_gt = imageio.imread(
+                    os.path.join(args.data_dir, s, name + ".png"))
 
-                # preprocess images
-                if s == "train":
-                    img_in_chunks, img_out_chunks = self.preprocess_train(img_in, img_out)
-                    imgs_in.extend(img_in_chunks)
-                    imgs_out.extend(img_out_chunks)
-                else:
-                    img_in, img_out = self.preprocess_test(img_in, img_out)
-                    imgs_in.append(img_in)
-                    imgs_out.append(img_out)
+                buffers_in, img_gt = self.preprocess(rgba, img_gt)
 
-            if False:
-                # print(img_in_chunks.shape)
-                temp1 = torch.stack([torch.from_numpy(x) for x in imgs_in])
-                print(temp1.shape)
-                torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
-                temp2 = torch.stack([torch.from_numpy(x) for x in imgs_out])
-                print(temp2.shape)
-                torchvision.utils.save_image(temp2.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp2.png"), nrow=10)
-                exit(1)
+                # # preprocess images
+                # if s == "train":
+                #     buffer_in_chunks, img_gt_chunks = self.preprocess_train(buffer_in, img_gt)
+                #     buffers_in.extend(buffer_in_chunks)
+                #     imgs_gt.extend(img_gt_chunks)
+                # else:
+                #     buffer_in, img_gt = self.preprocess_test(buffer_in, img_gt)
 
-            self.imgs_in[s] = torch.stack([torch.from_numpy(x) for x in imgs_in]).to(device)
-            self.imgs_out[s] = torch.stack([torch.from_numpy(x) for x in imgs_out]).to(device)
+                buffers_in_list.append(buffers_in)
+                imgs_gt_list.append(img_gt)
 
-    def preprocess_train(self, img_in, img_out):
-        img_in /= 255
-        img_out /= 255
-        img_in = img_in[..., :3]
-        if img_out.shape[-1] == 4:
-            alpha = img_out[..., -1:]
-            img_out = img_out[..., :3] * alpha + 1 * (1 - alpha)
+            self.buffers_in[s] = torch.stack([torch.from_numpy(x) for x in buffers_in_list]).to(device)
+            self.imgs_gt[s] = torch.stack([torch.from_numpy(x) for x in imgs_gt_list]).to(device)
 
-        # slice into chunks
-        n = 80
-        tolerance = 0.8
+    # def preprocess_train(self, buffer_in, img_gt):
+    #     buffer_in /= 255
+    #     img_gt /= 255
+    #     if buffer_in.shape[-1] == 3:
+    #         buffer_in = np.concatenate([buffer_in, 
+    #             np.ones((buffer_in.shape[0], buffer_in.shape[1], 1))], axis=-1)
+    #     if img_gt.shape[-1] == 4:
+    #         alpha = img_gt[..., -1:]
+    #         img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
 
-        def valid_chunk(img_chunk):
-            percentage = np.sum(img_chunk == [1, 1, 1]) / img_chunk.size
-            return percentage < tolerance
-        img_in_chunks = []
-        img_out_chunks = []
-        for i in range(0, img_in.shape[0], n):
-            for j in range(0, img_in.shape[1], n):
-                img_out_chunk = img_out[i:i+n, j:j+n]
-                if not valid_chunk(img_out_chunk):
-                    continue
-                img_in_chunk = img_in[i:i+n, j:j+n]
+    #     # slice into chunks
+    #     n = 800
+    #     tolerance = 1
 
-                img_in_chunks.append(img_in_chunk)
-                img_out_chunks.append(img_out_chunk)
+    #     def valid_chunk(img_chunk):
+    #         percentage = np.sum(img_chunk == [1, 1, 1]) / img_chunk.size
+    #         return percentage < tolerance
+    #     buffer_in_chunks = []
+    #     img_gt_chunks = []
+    #     for i in range(0, buffer_in.shape[0], n):
+    #         for j in range(0, buffer_in.shape[1], n):
+    #             img_gt_chunk = img_gt[i:i+n, j:j+n]
+    #             if not valid_chunk(img_gt_chunk):
+    #                 continue
+    #             buffer_in_chunk = buffer_in[i:i+n, j:j+n]
 
-        return img_in_chunks, img_out_chunks
+    #             buffer_in_chunks.append(buffer_in_chunk)
+    #             img_gt_chunks.append(img_gt_chunk)
 
-    def preprocess_test(self, img_in, img_out):
-        img_in /= 255
-        img_out /= 255
-        img_in = img_in[..., :3]
-        if img_out.shape[-1] == 4:
-            alpha = img_out[..., -1:]
-            img_out = img_out[..., :3] * alpha + 1 * (1 - alpha)
-        return img_in, img_out
+    #     return buffer_in_chunks, img_gt_chunks
+
+    # def preprocess_test(self, buffer_in, img_gt):
+    #     buffer_in /= 255
+    #     img_gt /= 255
+    #     if buffer_in.shape[-1] == 3:
+    #         buffer_in = np.concatenate([buffer_in, 
+    #             np.ones((buffer_in.shape[0], buffer_in.shape[1], 1))], axis=-1)
+    #     if img_gt.shape[-1] == 4:
+    #         alpha = img_gt[..., -1:]
+    #         img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
+    #     return buffer_in, img_gt
+
+    def preprocess(self, rgba, img_gt):
+        # convert to float
+        rgba = rgba.astype(np.float32) / 255.0
+        img_gt = img_gt.astype(np.float32) / 255.0
+
+        # print(rgba.shape)
+        if rgba.shape[-1] == 3:
+            print("!!FIXME: rbga is always 4 channels!!")
+            exit(1)
+        # print(rgba.shape)
+
+        # white background
+        if img_gt.shape[-1] == 4:
+            alpha = img_gt[..., -1:]
+            img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
+
+        if False:
+            # print(img_in_chunks.shape)
+            temp1 = torch.stack([torch.from_numpy(x) for x in [rgba]])
+            print(temp1.shape)
+            torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
+            temp2 = torch.stack([torch.from_numpy(x) for x in [img_gt]])
+            print(temp2.shape)
+            torchvision.utils.save_image(temp2.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp2.png"), nrow=10)
+            exit(1)
+        return rgba, img_gt
 
     def dataloader(self, task):
-        dataset = DenoiserDatasetSplit(self.imgs_in[task], self.imgs_out[task])
+        dataset = DenoiserDatasetSplit(self.buffers_in[task], self.imgs_gt[task])
         loader = DataLoader(dataset,
             shuffle=(task == "train"),
-            batch_size=(16 if task == "train" else 1), 
+            batch_size=(self.args.batch_size if task == "train" else 1), 
             num_workers=0)
         return loader

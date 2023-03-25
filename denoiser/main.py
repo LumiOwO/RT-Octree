@@ -85,6 +85,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=5e-4, 
                         help="learning rate")
     parser.add_argument('--epochs', type=int, default=30000, help="training iters")
+    parser.add_argument("--batch_size", type=int, default=16, 
+                        help="batch_size for dataloader")
 
     # 
     parser.add_argument("--netdepth", type=int, default=8, 
@@ -111,8 +113,7 @@ if __name__ == "__main__":
                         help="do not reload weights from saved ckpt")
     parser.add_argument("--ft_path", type=str, default=None, 
                         help="specific weights npy file to reload for coarse network")
-    parser.add_argument("--batch_size", type=str, default=16, 
-                        help="batch_size for dataloader")
+    
     parser.add_argument("--num_workers", type=int, default=12, 
                         help="num_workers for dataloader")
 

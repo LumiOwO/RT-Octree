@@ -81,25 +81,42 @@ class DenoiserNetwork(nn.Module):
         self.weight_layer = RepVGG(mid_channels, kernel_levels)
         self.kernel_layer = RepVGG(mid_channels, kernel_levels)
 
-    def forward(self, imgs_in, requires_grad=False):
-        # !!! only support B == 1 !!!
+    def forward(self, buffers_in, requires_grad=False):
+        # buffers_in [B, H, W, C]
+        imgs_in = buffers_in[..., :4]
+        buffers_in = buffers_in[..., :self.in_channels]
+        B = imgs_in.shape[0]
+        # print(imgs_in.shape)
 
         # kernel prediction
-        x = imgs_in.permute(0, 3, 1, 2).contiguous() # [B, C, H, W]
+        x = buffers_in.permute(0, 3, 1, 2).contiguous() # [B, C, H, W]
         for layer in self.layers:
             x = layer(x)
 
         weight_map = self.weight_layer(x) # [B, L, H, W]
         weight_map = F.softmax(weight_map, dim=1)
-        weight_map = weight_map.squeeze(0) # [L, H, W]
 
         kernel_map = self.kernel_layer(x) # [B, L, H, W]
-        kernel_map = kernel_map.squeeze(0) # [L, H, W]
 
         # kernel reconstruction and apply
-        imgs_in = imgs_in.squeeze(0) # [H, W, 4]
-        imgs_out = _denoiser.filtering(
-            weight_map, kernel_map, imgs_in, requires_grad=requires_grad)
+        if B == 1:
+            # filtering only support B == 1
+            weight_map = weight_map.squeeze(0) # [L, H, W]
+            kernel_map = kernel_map.squeeze(0) # [L, H, W]
+            imgs_in = imgs_in.squeeze(0) # [H, W, 4]
+            imgs_out = _denoiser.filtering(
+                weight_map, kernel_map, imgs_in, requires_grad=requires_grad)
+            return imgs_out.unsqueeze(0) # [B, H, W, 4]
+
+        # streams = [torch.cuda.Stream(), torch.cuda.Stream()]
+        # torch.cuda.synchronize()
+        imgs_out = torch.zeros_like(imgs_in)
+        for i in range(B):
+            # with torch.cuda.stream(streams[i % 2]):
+            imgs_out[i] = _denoiser.filtering(
+                weight_map[i], kernel_map[i], imgs_in[i], requires_grad=requires_grad)
+
+        # torch.cuda.synchronize()
         return imgs_out
 
 
