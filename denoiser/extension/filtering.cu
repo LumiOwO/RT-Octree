@@ -190,12 +190,14 @@ __global__ void applying(
 
     // accumulate
     float w = weight_map[0] / kernel_sum;
-    at::native::fastAtomicAdd(imgs_out, 0, 1, rgb.x * w, true);
-    at::native::fastAtomicAdd(imgs_out, 1, 1, rgb.y * w, true);
-    at::native::fastAtomicAdd(imgs_out, 2, 1, rgb.z * w, true);
-    // imgs_out[0] += rgb.x * w;
-    // imgs_out[1] += rgb.y * w;
-    // imgs_out[2] += rgb.z * w;
+    // at::native::fastAtomicAdd(imgs_out, 0, 1, rgb.x * w, true);
+    // at::native::fastAtomicAdd(imgs_out, 1, 1, rgb.y * w, true);
+    // at::native::fastAtomicAdd(imgs_out, 2, 1, rgb.z * w, true);
+    // !!! IMPORTANT: only valid when all levels 
+    // !!!            are dispatched on the same stream!
+    imgs_out[0] += rgb.x * w;
+    imgs_out[1] += rgb.y * w;
+    imgs_out[2] += rgb.z * w;
 
     // save for backward
     if (rgb_filtered != nullptr) {
@@ -527,12 +529,14 @@ public:
         // }
 
         // free cuda array for texture object
+        cudaDestroyTextureObject(imgs_in_tex);
         cudaFreeArray(imgs_in_cu);
         // for (auto& cu : weight_cus) {
         //     cudaFreeArray(cu);
         // }
-        for (auto& cu : kernel_cus) {
-            cudaFreeArray(cu);
+        for (int level = 0; level < L; level++) {
+            cudaDestroyTextureObject(kernel_texs[level]);
+            cudaFreeArray(kernel_cus[level]);
         }
 
         if (requires_grad) {

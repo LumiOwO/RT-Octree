@@ -5,8 +5,9 @@ import os
 import torchvision
 
 class BaseLogger():
-    def __init__(self):
-        pass
+    def __init__(self, args):
+        with open(os.path.join(args.work_dir, "args.json"), 'w') as f:
+            json.dump(vars(args), f, indent=2)
 
     def print(self, s, **kwargs):
         tqdm.write(f"===== {s}", **kwargs)

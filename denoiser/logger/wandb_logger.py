@@ -4,8 +4,11 @@ from .base_logger import BaseLogger
 
 class WandbLogger(BaseLogger):
     def __init__(self, args):
-        super().__init__()
         wandb.init(project="my-awesome-project")
+        args.wandb_name = wandb.run.name
+
+        super().__init__(args)
+        wandb.log(vars(args))
 
     def log(self, logs_dict):
         super().log(logs_dict)

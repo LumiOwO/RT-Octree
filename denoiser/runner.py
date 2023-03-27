@@ -1,5 +1,6 @@
 import torch
 import os
+import gc
 
 from tqdm import tqdm, trange
 from denoiser.utils import load_checkpoint
@@ -52,6 +53,8 @@ class Runner(object):
         for epoch in trange(start, self.args.epochs + 1):
             self.epoch = epoch
             self.train_one_epoch(model, dataloader, optimizer, lr_scheduler)
+            gc.collect()
+            torch.cuda.empty_cache()
 
             # run test set
             if epoch > start and epoch < self.args.epochs and epoch % self.args.i_test == 0:

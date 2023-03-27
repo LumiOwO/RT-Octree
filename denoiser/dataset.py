@@ -48,61 +48,56 @@ class DenoiserDataset():
 
                 buffers_in, img_gt = self.preprocess(rgba, img_gt)
 
-                # # preprocess images
                 # if s == "train":
-                #     buffer_in_chunks, img_gt_chunks = self.preprocess_train(buffer_in, img_gt)
-                #     buffers_in.extend(buffer_in_chunks)
-                #     imgs_gt.extend(img_gt_chunks)
-                # else:
-                #     buffer_in, img_gt = self.preprocess_test(buffer_in, img_gt)
+                if False:
+                    buffers_in, img_gt = self.slice_imgs(buffers_in, img_gt)
+                else:
+                    buffers_in = [buffers_in]
+                    img_gt = [img_gt]
 
-                buffers_in_list.append(buffers_in)
-                imgs_gt_list.append(img_gt)
+                buffers_in_list.extend(buffers_in)
+                imgs_gt_list.extend(img_gt)
 
             self.buffers_in[s] = torch.stack([torch.from_numpy(x) for x in buffers_in_list]).to(device)
             self.imgs_gt[s] = torch.stack([torch.from_numpy(x) for x in imgs_gt_list]).to(device)
 
-    # def preprocess_train(self, buffer_in, img_gt):
-    #     buffer_in /= 255
-    #     img_gt /= 255
-    #     if buffer_in.shape[-1] == 3:
-    #         buffer_in = np.concatenate([buffer_in, 
-    #             np.ones((buffer_in.shape[0], buffer_in.shape[1], 1))], axis=-1)
-    #     if img_gt.shape[-1] == 4:
-    #         alpha = img_gt[..., -1:]
-    #         img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
+    def slice_imgs(self, buffers_in, img_gt):
+        # slice into chunks
+        n = 80
+        tolerance = 0.8
 
-    #     # slice into chunks
-    #     n = 800
-    #     tolerance = 1
+        def valid_chunk(img_gt_chunk):
+            if img_gt.shape[-1] == 4:
+                alpha = img_gt_chunk[..., -1]
+                percentage = np.sum(alpha == 0) / alpha.size
+            else:
+                rgb = img_gt_chunk[..., :3]
+                percentage = np.sum(rgb == [1, 1, 1]) / rgb.size
+            # print(percentage)
+            return percentage < tolerance
+        buffers_in_chunks = []
+        img_gt_chunks = []
+        for i in range(0, buffers_in.shape[0], n):
+            for j in range(0, buffers_in.shape[1], n):
+                img_gt_chunk = img_gt[i:i+n, j:j+n]
+                if not valid_chunk(img_gt_chunk):
+                    continue
+                buffers_in_chunk = buffers_in[i:i+n, j:j+n]
 
-    #     def valid_chunk(img_chunk):
-    #         percentage = np.sum(img_chunk == [1, 1, 1]) / img_chunk.size
-    #         return percentage < tolerance
-    #     buffer_in_chunks = []
-    #     img_gt_chunks = []
-    #     for i in range(0, buffer_in.shape[0], n):
-    #         for j in range(0, buffer_in.shape[1], n):
-    #             img_gt_chunk = img_gt[i:i+n, j:j+n]
-    #             if not valid_chunk(img_gt_chunk):
-    #                 continue
-    #             buffer_in_chunk = buffer_in[i:i+n, j:j+n]
+                img_gt_chunks.append(img_gt_chunk)
+                buffers_in_chunks.append(buffers_in_chunk)
 
-    #             buffer_in_chunks.append(buffer_in_chunk)
-    #             img_gt_chunks.append(img_gt_chunk)
+        if False:
+            # print(img_in_chunks.shape)
+            temp1 = torch.stack([torch.from_numpy(x[..., :3]) for x in buffers_in_chunks])
+            print(temp1.shape)
+            torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
+            temp2 = torch.stack([torch.from_numpy(x) for x in img_gt_chunks])
+            print(temp2.shape)
+            torchvision.utils.save_image(temp2.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp2.png"), nrow=10)
+            exit(1)
 
-    #     return buffer_in_chunks, img_gt_chunks
-
-    # def preprocess_test(self, buffer_in, img_gt):
-    #     buffer_in /= 255
-    #     img_gt /= 255
-    #     if buffer_in.shape[-1] == 3:
-    #         buffer_in = np.concatenate([buffer_in, 
-    #             np.ones((buffer_in.shape[0], buffer_in.shape[1], 1))], axis=-1)
-    #     if img_gt.shape[-1] == 4:
-    #         alpha = img_gt[..., -1:]
-    #         img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
-    #     return buffer_in, img_gt
+        return buffers_in_chunks, img_gt_chunks
 
     def preprocess(self, rgba, img_gt):
         # convert to float
@@ -120,15 +115,6 @@ class DenoiserDataset():
             alpha = img_gt[..., -1:]
             img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
 
-        if False:
-            # print(img_in_chunks.shape)
-            temp1 = torch.stack([torch.from_numpy(x) for x in [rgba]])
-            print(temp1.shape)
-            torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
-            temp2 = torch.stack([torch.from_numpy(x) for x in [img_gt]])
-            print(temp2.shape)
-            torchvision.utils.save_image(temp2.permute(0, 3, 1, 2), os.path.join(self.args.work_dir, "temp2.png"), nrow=10)
-            exit(1)
         return rgba, img_gt
 
     def dataloader(self, task):

@@ -21,11 +21,11 @@ def main(args):
     assert device.type == "cuda", "CPU-only not supported."
 
     # Logger
+    Path(args.work_dir).mkdir(parents=True, exist_ok=True)
     if args.use_wandb:
         logger = WandbLogger(args)
     else:
-        logger = BaseLogger()
-    Path(args.work_dir).mkdir(parents=True, exist_ok=True)
+        logger = BaseLogger(args)
 
     # Load data
     dataset = DenoiserDataset(args, device=device)
