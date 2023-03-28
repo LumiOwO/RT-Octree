@@ -4,15 +4,30 @@
 
 This implementation is based on [PlenOctree](https://github.com/sxyu/volrend)
 
-## renderer
+## Renderer
+
+### Libtorch
+- Linux: 
+https://download.pytorch.org/libtorch/cu113/libtorch-cxx11-abi-shared-with-deps-1.11.0%2Bcu113.zip
+- Windows: 
+https://download.pytorch.org/libtorch/cu113/libtorch-win-shared-with-deps-1.11.0%2Bcu113.zip
+
+### Build
+```bash
+# install libtorch
+wget https://download.pytorch.org/libtorch/cu113/libtorch-cxx11-abi-shared-with-deps-1.11.0%2Bcu113.zip
+unzip libtorch-cxx11-abi-shared-with-deps-1.11.0+cu113.zip
 
 mkdir build
 cd build
 cmake ../renderer
 make -j12
+```
 
-./volrend_headless ../data/lego/tree.npz -i ../data/lego/intrinsics.txt  $(ls -1v ../data/lego/pose/*) -o ../output_img
-
+### Test
+```bash
+./volrend_headless ../data/nerf_synthetic/lego/tree.npz ../data/nerf_synthetic/lego/transforms_val.json -o ../output_dir
+```
 ---
 
 

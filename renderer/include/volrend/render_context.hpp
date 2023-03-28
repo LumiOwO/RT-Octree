@@ -1,10 +1,11 @@
 #pragma once
-
 #include <cuda_runtime.h>
 
+#include <memory>
+
 #include "pcg32.h"
-#include "volrend/cuda/common.cuh"
 #include "volrend/camera.hpp"
+#include "volrend/cuda/common.cuh"
 
 namespace volrend {
 
@@ -21,6 +22,8 @@ enum {
 
 // Rendering context for delta tracking 
 struct RenderContext {
+    struct BuffersIn;
+
     bool has_history = false;
     int spp = 0; // samples for current pose
     
@@ -34,6 +37,13 @@ struct RenderContext {
     float* VOLREND_RESTRICT prev_transform_device = nullptr;
     float* prev_transform_host = nullptr;
     bool cam_inited = false;
+
+    // torch
+    // torch::TensorOptions tensor_options =
+    //     torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
+    // torch::Tensor rgba_noisy  = torch::Tensor();
+    // torch::Tensor depth_noisy = torch::Tensor();
+    std::shared_ptr<BuffersIn> buffers_in;
 
 public:
     RenderContext() = default;
@@ -70,6 +80,10 @@ public:
         // free host
         delete prev_transform_host;
         prev_transform_host = nullptr;
+        // free tensors
+        // rgba_noisy  = torch::Tensor();
+        // depth_noisy = torch::Tensor();
+        buffers_in = nullptr;
     }
 
     void resize(int width, int height) {
@@ -80,12 +94,19 @@ public:
         // previous camera
         cuda(Malloc((void**)&prev_transform_device, 12 * sizeof(float)));
         // frames
-        size_t&& d_size = sizeof(float) * width * height;
+        size_t&& d_size    = sizeof(float) * width * height;
         size_t&& rgba_size = d_size * 4;
         cuda(Malloc(&data[PREV_RGBA], rgba_size));
         cuda(Malloc(&data[CUR_RGBA], rgba_size));
         cuda(Malloc(&data[PREV_D], d_size));
         cuda(Malloc(&data[CUR_D], d_size));
+
+        // tensor
+        // rgba_noisy  = torch::zeros({height, width, 4}, tensor_options);
+        // depth_noisy = torch::zeros({height, width, 1}, tensor_options);
+        // buffers_in = std::make_shared<BuffersIn>();
+        // buffers_in->rgba  = torch::zeros({height, width, 4}, buffers_in->options);
+        // buffers_in->depth = torch::zeros({height, width, 1}, buffers_in->options);
     }
 };
 

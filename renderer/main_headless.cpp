@@ -1,24 +1,26 @@
-#include <cstdlib>
+#include <stdint.h>
+
+#include <cmath>
 #include <cstdio>
-#include <string>
-#include <vector>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
-#include <cmath>
-#include <stdint.h>
 #include <iostream>
+#include <string>
+#include <vector>
 
-#include "volrend/internal/auto_filesystem.hpp"
-
+#include "json.hpp"
 #include "volrend/common.hpp"
+#include "volrend/denoiser/denoiser.hpp"
+#include "volrend/internal/auto_filesystem.hpp"
+#include "volrend/internal/imwrite.hpp"
+#include "volrend/internal/opts.hpp"
 #include "volrend/n3tree.hpp"
 
-#include "volrend/internal/opts.hpp"
-
+// clang-format off
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/renderer_kernel.hpp"
-#include "volrend/internal/imwrite.hpp"
-#include "json.hpp"
+// clang-format on
 
 using json = nlohmann::json;
 
@@ -217,7 +219,6 @@ int main(int argc, char *argv[])
 
     N3Tree tree(args["file"].as<std::string>());
 
-
     {
         float scale = args["scale"].as<float>();
         if (scale != 1.f)
@@ -269,160 +270,15 @@ int main(int argc, char *argv[])
     RenderContext ctx;
     ctx.resize(width, height);
 
-    // // warm up
-    // ctx.clearHistory();
-    // camera.transform = trans[0];
-    // camera._update(false);
-    // for (size_t i = 0; i < 1024; ++i)
-    // {
-    //     launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    // }
-
-    // options.denoise = false;
-    // options.clamp_support = 2;
-    // options.clamp_k = 1.0f;
-    // options.depth_diff_thresh = 100000.0f;
-    // options.prev_weight = 0.f;
-
-    // // render poses
-    // int interpol_num = 2;
-    // int warm_up_num = 10;
-    // int copy_num = 1;
-    // float max_trans_legth = 50;
-    // float max_rotate_degree = 5;
-    // max_rotate_degree = max_rotate_degree * 3.14159 / 180;
-    // float delta_degree = max_rotate_degree / (float)interpol_num;
-    // float delta_len = max_trans_legth / float(interpol_num);
-    // cudaEventRecord(start);
-    // for (size_t i = 0; i < trans.size(); ++i)
-    // {
-    //     for (int trans_i = 0; trans_i < 3; trans_i++)
-    //     {
-    //         if (trans_i == 0)
-    //         {
-    //             ctx.clearHistory();
-    //             camera.transform = trans[i];
-    //             camera._update(false);
-    //             for (int inter_i = 0; inter_i < copy_num; inter_i++)
-    //             {
-    //                 launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    //             }
-    //             if (out_dir.size())
-    //             {
-    //                 cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
-    //                                             sizeof(float4) * width, height,
-    //                                             cudaMemcpyDeviceToHost, stream));
-    //                 auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-    //                 for (int j = 0; j < buf.size(); j++)
-    //                 {
-    //                     buf_uint8[j] = buf[j] * 255;
-    //                 }
-    //                 std::string fpath = out_dir + "/copy/" + basenames[i] + ".png";
-    //                 internal::write_png_file(fpath, buf_uint8.data(), width, height);
-    //             }
-    //         }
-    //         else if (trans_i == 1)
-    //         {
-    //             trans[i][3][0] -= interpol_num * delta_len;
-    //             trans[i][3][0] += delta_len;
-    //             ctx.clearHistory();
-    //             camera.transform = trans[i];
-    //             camera._update(false);
-    //             for (size_t i = 0; i < warm_up_num; ++i)
-    //             {
-    //                 launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    //             }
-    //             // if (out_dir.size())
-    //             // {
-    //             //     cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
-    //             //                                 sizeof(float4) * width, height,
-    //             //                                 cudaMemcpyDeviceToHost, stream));
-    //             //     auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-    //             //     for (int j = 0; j < buf.size(); j++)
-    //             //     {
-    //             //         buf_uint8[j] = buf[j] * 255;
-    //             //     }
-    //             //     std::string fpath = out_dir + "/trans/" + basenames[i] + ".png";
-    //             //     internal::write_png_file(fpath, buf_uint8.data(), width, height);
-    //             // }
-    //             for (int inter_i = 1; inter_i < interpol_num; inter_i++)
-    //             {
-    //                 trans[i][3][0] += delta_len;
-    //                 camera.transform = trans[i];
-    //                 camera._update(false);
-    //                 launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    //             }
-    //             if (out_dir.size())
-    //             {
-    //                 cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
-    //                                             sizeof(float4) * width, height,
-    //                                             cudaMemcpyDeviceToHost, stream));
-    //                 auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-    //                 for (int j = 0; j < buf.size(); j++)
-    //                 {
-    //                     buf_uint8[j] = buf[j] * 255;
-    //                 }
-    //                 std::string fpath = out_dir + "/trans/" + basenames[i] + ".png";
-    //                 internal::write_png_file(fpath, buf_uint8.data(), width, height);
-    //             }
-    //         }
-    //         else
-    //         {
-    //             std::vector<glm::mat4x3> trans_series;
-    //             trans_series.resize(interpol_num);
-    //             for (int inter_i = 0; inter_i < interpol_num; inter_i++)
-    //             {
-    //                 for (int tmp = 0; tmp < 3; tmp++)
-    //                 {
-    //                     trans_series[inter_i][0][tmp] = trans[i][0][tmp] * cos(delta_degree * inter_i) + trans[i][1][tmp] * sin(delta_degree * inter_i);
-    //                     trans_series[inter_i][1][tmp] = -trans[i][0][tmp] * sin(delta_degree * inter_i) + trans[i][1][tmp] * cos(delta_degree * inter_i);
-    //                     trans_series[inter_i][2][tmp] = trans[i][2][tmp];
-    //                     trans_series[inter_i][3][tmp] = trans[i][3][tmp];
-    //                 }
-    //             }
-    //             camera.transform = trans_series[interpol_num - 1];
-    //             camera._update(false);
-    //             ctx.clearHistory();
-    //             for (size_t i = 0; i < warm_up_num; ++i)
-    //             {
-    //                 launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    //             }
-    //             for (int inter_i = interpol_num - 2; inter_i >= 0; inter_i--)
-    //             {
-    //                 camera.transform = trans_series[inter_i];
-    //                 camera._update(false);
-    //                 launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
-    //             }
-    //             if (out_dir.size())
-    //             {
-    //                 cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
-    //                                             sizeof(float4) * width, height,
-    //                                             cudaMemcpyDeviceToHost, stream));
-    //                 auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-    //                 for (int j = 0; j < buf.size(); j++)
-    //                 {
-    //                     buf_uint8[j] = buf[j] * 255;
-    //                 }
-    //                 std::string fpath = out_dir + "/rotate/" + basenames[i] + ".png";
-    //                 internal::write_png_file(fpath, buf_uint8.data(), width, height);
-    //             }
-    //         }
-    //     }
-    // }
-    
-    // cudaEventRecord(stop);
-    // cudaEventSynchronize(stop);
-    // float milliseconds = 0;
-    // cudaEventElapsedTime(&milliseconds, start, stop);
-    // size_t cnt = trans.size() * (copy_num + (interpol_num - 1 + warm_up_num) * 2);
-    // milliseconds = milliseconds / cnt;
-
-    // printf("%.10f ms per frame\n", milliseconds);
-    // printf("%.10f fps\n", 1000.f / milliseconds);
-
     options.delta_tracking = true;
     options.denoise = false;
     ctx.clearHistory();
+
+    std::cout << Denoiser::test() << std::endl;
+    // auto tensor = torch::zeros({2, 3});
+    // std::cout << tensor << std::endl;
+
+    cudaEventRecord(start);
     for (size_t i = 0; i < trans.size(); ++i)
     {
         camera.transform = trans[i];
@@ -445,6 +301,12 @@ int main(int argc, char *argv[])
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    milliseconds = milliseconds / trans.size();
+
+    printf("%.10f ms per frame\n", milliseconds);
+    printf("%.10f fps\n", 1000.f / milliseconds);
 
     cuda(FreeArray(array));
     cuda(StreamDestroy(stream));

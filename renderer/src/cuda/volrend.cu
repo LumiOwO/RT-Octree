@@ -1,14 +1,15 @@
+#include <cuda_fp16.h>
+
 #include <cstdint>
 #include <cstdio>
-#include <ctime>
 #include <cstring>
-#include <cuda_fp16.h>
+#include <ctime>
 
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/rt_core.cuh"
-#include "volrend/render_options.hpp"
 #include "volrend/internal/data_spec.hpp"
 #include "volrend/render_context.hpp"
+#include "volrend/render_options.hpp"
 
 namespace volrend {
 
@@ -556,15 +557,24 @@ __host__ void launch_renderer(const N3Tree& tree,
     );
 
     if (options.delta_tracking) {
-        // temporal denoise
-        device::temporal_accumulate<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-            surf_obj,
-            surf_obj_depth,
-            cam,
-            ctx,
-            options,
-            image_arr
-        );
+        // // temporal denoise
+        // device::temporal_accumulate<<<blocks, N_CUDA_THREADS, 0, stream>>>(
+        //     surf_obj,
+        //     surf_obj_depth,
+        //     cam,
+        //     ctx,
+        //     options,
+        //     image_arr
+        // );
+
+        // auto temp = torch.cat(
+        //     {
+        //         ctx.rgba_noisy.permute({2, 0, 1}),   // [4, H, W]
+        //         ctx.depth_noisy.permute({2, 0, 1}),  // [1, H, W]
+        //     },
+        //     /*dim=*/0);
+        // std::cout << temp.sizes() << std::endl;
+        // std::cout << temp.is_contiguous() << std::endl;
 
         // update rng
         ctx.rng.advance();

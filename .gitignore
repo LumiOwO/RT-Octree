@@ -5,9 +5,9 @@ data
 output*/
 *.npz
 *.zip
-zildNt3f
 .vs
 .vscode
 __pycache__/
 logs*/
 wandb/
+libtorch/

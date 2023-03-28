@@ -12,6 +12,9 @@ endif (POLICY CMP0069)
 if (POLICY CMP0072)
     cmake_policy(SET CMP0072 NEW)
 endif (POLICY CMP0072)
+if (POLICY CMP0077)
+    cmake_policy(SET CMP0077 NEW)
+endif (POLICY CMP0077)
 
 project( volrend )
 set(VOLREND_VERSION_MAJOR 0)
@@ -236,6 +239,13 @@ if (NOT EMSCRIPTEN)
     endif()
 
     find_package(Threads REQUIRED)
+
+    # torch lib
+    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../libtorch")
+    find_package(Torch REQUIRED)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+    include_directories(${TORCH_INCLUDE_DIRS})
+
 endif(NOT EMSCRIPTEN)
 
 # create volrend.hpp
@@ -249,6 +259,16 @@ add_library( ${PROJ_LIB_NAME} STATIC ${VOLREND_SOURCES}
 if (WIN32)
     set_target_properties( ${PROJ_LIB_NAME} PROPERTIES OUTPUT_NAME "libvolrend" )
 endif()
+
+# Add denoiser library
+set( DENOISER_LIB_NAME ${PROJ_LIB_NAME}_denoiser)
+set( DENOISER_HEADERS ${INCLUDE_DIR}/volrend/denoiser/denoiser.hpp )
+set( DENOISER_SOURCES ${SRC_DIR}/denoiser/denoiser.cpp )
+add_library( ${DENOISER_LIB_NAME} STATIC ${DENOISER_SOURCES})
+if (WIN32)
+    set_target_properties( ${DENOISER_LIB_NAME} PROPERTIES OUTPUT_NAME "libvolrend_denoiser" )
+endif()
+
 
 if (_VOLREND_USE_CUDA)
     set_target_properties( ${PROJ_LIB_NAME}
@@ -271,6 +291,7 @@ else(_VOLREND_USE_CUDA)
     add_dependencies( ${PROJ_LIB_NAME} shader_inline )
 endif(_VOLREND_USE_CUDA)
 
+# Main library
 target_include_directories(
     ${PROJ_LIB_NAME} PUBLIC
     $<BUILD_INTERFACE:${INCLUDE_DIR}>
@@ -283,6 +304,19 @@ target_include_directories(
     )
 target_link_libraries( ${PROJ_LIB_NAME} PUBLIC
     ${DEPENDENCIES}
+    ${CMAKE_THREAD_LIBS_INIT}
+    ${CMAKE_DL_LIBS}
+    )
+
+# Denoiser library
+target_include_directories(
+    ${DENOISER_LIB_NAME} PUBLIC
+    $<BUILD_INTERFACE:${INCLUDE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+target_link_libraries( ${DENOISER_LIB_NAME}
+    ${TORCH_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
     ${CMAKE_DL_LIBS}
     )
@@ -408,7 +442,7 @@ else (EMSCRIPTEN)
 
     macro(VOLREND_ADD_EXECUTABLE target_name output_name main_file)
         add_executable( ${target_name} ${main_file} )
-        target_link_libraries( ${target_name} ${PROJ_LIB_NAME} )
+        target_link_libraries( ${target_name} ${PROJ_LIB_NAME} ${DENOISER_LIB_NAME} )
         set_target_properties( ${target_name} PROPERTIES OUTPUT_NAME ${output_name} )
         if(WIN32 AND _VOLREND_USE_CUDA)
             set_target_properties( ${target_name}
@@ -427,6 +461,22 @@ else (EMSCRIPTEN)
         if(WIN32)
             set_target_properties( ${PROJ_LIB_NAME}
                 PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+            file(GLOB TORCH_DLLS "${TORCH_INSTALL_PREFIX}/lib/*.dll")
+            add_custom_command(TARGET volrend_exe
+                                POST_BUILD
+                                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                ${TORCH_DLLS}
+                                $<TARGET_FILE_DIR:volrend_exe>)
+            add_custom_command(TARGET volrend_anim_exe
+                                POST_BUILD
+                                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                ${TORCH_DLLS}
+                                $<TARGET_FILE_DIR:volrend_anim_exe>)
+            add_custom_command(TARGET volrend_headless_exe
+                                POST_BUILD
+                                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                ${TORCH_DLLS}
+                                $<TARGET_FILE_DIR:volrend_headless_exe>)
         endif()
     endif(_VOLREND_USE_CUDA)
 
