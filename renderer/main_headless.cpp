@@ -1,3 +1,5 @@
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <stdint.h>
 
 #include <cmath>
@@ -9,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "json.hpp"
 #include "volrend/common.hpp"
 #include "volrend/denoiser/denoiser.hpp"
 #include "volrend/internal/auto_filesystem.hpp"
@@ -266,15 +267,29 @@ int main(int argc, char *argv[])
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    RenderOptions options = internal::render_options_from_args(args);
+    // options
+    // RenderOptions options = internal::render_options_from_args(args);
+    auto f_options = std::ifstream(args["file"].as<std::string>() + "pretty.json");
+    json j_options = json::parse(f_options);
+    RenderOptions options = j_options;
+    // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
+    // o << std::setw(2) << j << std::endl;
+    // options.delta_tracking = true;
+    // options.denoise = false;
+
     RenderContext ctx;
     ctx.resize(width, height);
-
-    options.delta_tracking = true;
-    options.denoise = false;
     ctx.clearHistory();
 
-    std::cout << Denoiser::test() << std::endl;
+    at::cuda::CUDAStreamGuard stream_guard(at::cuda::CUDAStream(stream));
+    torch::TensorOptions tensor_options =
+        torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
+    auto rgba_noisy  = torch::zeros({height, width, 4}, tensor_options);
+    auto depth_noisy = torch::zeros({height, width, 1}, tensor_options);
+    ctx.rgba_noisy   = (float4*)rgba_noisy.data_ptr();
+    ctx.depth_noisy  = (float *)depth_noisy.data_ptr();
+
+    // std::cout << Denoiser::test() << std::endl;
     // auto tensor = torch::zeros({2, 3});
     // std::cout << tensor << std::endl;
 
@@ -285,18 +300,56 @@ int main(int argc, char *argv[])
         camera._update(false);
 
         launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
+        // auto buffers_in = torch::cat(
+        //     {
+        //         rgba_noisy.permute({2, 0, 1}),   // [4, H, W]
+        //         depth_noisy.permute({2, 0, 1}),  // [1, H, W]
+        //     },
+        //     /*dim=*/0);
+        // std::cout << "rgba_noisy " << rgba_noisy.select(2, 3).min() << ", "
+        //           << rgba_noisy.select(2, 3).max() << std::endl;
+        // std::cout << "depth_noisy " << depth_noisy.min() << ", "
+        //           << depth_noisy.max() << std::endl;
         if (out_dir.size())
         {
-            cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
-                                        sizeof(float4) * width, height,
-                                        cudaMemcpyDeviceToHost, stream));
-            auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-            for (int j = 0; j < buf.size(); j++)
+            // cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
+            //                             sizeof(float4) * width, height,
+            //                             cudaMemcpyDeviceToHost, stream));
+            // auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
+            // for (int j = 0; j < buf.size(); j++)
+            // {
+            //     buf_uint8[j] = buf[j] * 255;
+            // }
+            // std::string fpath = out_dir + "/" + basenames[i] + ".png";
+            // internal::write_png_file(fpath, buf_uint8.data(), width, height);
             {
-                buf_uint8[j] = buf[j] * 255;
+                cuda(Memcpy(
+                    buf.data(),
+                    rgba_noisy.data_ptr(),
+                    sizeof(float4) * width * height,
+                    cudaMemcpyDeviceToHost));
+                auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
+                for (int j = 0; j < buf_uint8.size(); j++) {
+                    buf_uint8[j] = buf[j] * 255;
+                }
+                std::string fpath = out_dir + "/rgba_" + basenames[i] + ".png";
+                internal::write_png_file(
+                    fpath, buf_uint8.data(), width, height);
             }
-            std::string fpath = out_dir + "/" + basenames[i] + ".png";
-            internal::write_png_file(fpath, buf_uint8.data(), width, height);
+            {
+                cuda(Memcpy(
+                    buf.data(),
+                    depth_noisy.data_ptr(),
+                    sizeof(float) * width * height,
+                    cudaMemcpyDeviceToHost));
+                auto buf_uint8 = std::vector<uint8_t>(width * height);
+                for (int j = 0; j < buf_uint8.size(); j++) {
+                    buf_uint8[j] = buf[j] * 255;
+                }
+                std::string fpath = out_dir + "/depth_" + basenames[i] + ".png";
+                internal::write_png_file(
+                    fpath, buf_uint8.data(), width, height, true);
+            }
         }
     }
     cudaEventRecord(stop);

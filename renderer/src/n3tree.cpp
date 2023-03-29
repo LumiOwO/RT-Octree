@@ -261,7 +261,7 @@ void N3Tree::load_npz(cnpy::npz_t& npz) {
         scale[0] = scale[1] = scale[2] =
             (float)*npz["invradius"].data<double>();
     }
-    printf("INFO: Scale %f %f %f", scale[0], scale[1], scale[2]);
+    printf("INFO: Scale %f %f %f\n", scale[0], scale[1], scale[2]);
     {
         const float* offset_data = npz["offset"].data<float>();
         for (int i = 0; i < 3; ++i) offset[i] = offset_data[i];

@@ -253,14 +253,14 @@ __device__ __inline__ void delta_trace_ray(
             const scalar_t t_subcube = _dda_unit(pos, invdir) /  cube_sz;
             const scalar_t delta_t = t_subcube + opt.step_size;
             if (__half2float(tree_val[tree.data_dim - 1]) > opt.sigma_thresh) {
-                
-                const float delta = delta_t * delta_scale * __half2float(tree_val[tree.data_dim - 1]);
+                float sigma = __half2float(tree_val[tree.data_dim - 1]);
+                const float delta = delta_t * delta_scale * sigma;
                 if (src + delta >= dst) {
                     depth = t;
                     if (opt.render_depth) {
                         out[0] = t;
                         out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
-                        out[3] = 1.f;
+                        out[3] = sigma;
                         return;
                     } else {
                         if (tree.data_format.basis_dim >= 0) {
@@ -312,7 +312,7 @@ __device__ __inline__ void delta_trace_ray(
                         }
                     }
 
-                    out[3] = 1.f;
+                    out[3] = sigma;
                     return;
                 }
                 src += delta;

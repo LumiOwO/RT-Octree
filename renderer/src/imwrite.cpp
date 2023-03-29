@@ -12,7 +12,7 @@ namespace volrend {
 namespace internal {
 
 bool write_png_file(const std::string &filename, uint8_t *ptr, int width,
-                    int height) {
+                    int height, bool is_gray) {
 #ifdef VOLREND_PNG
     FILE *fp = fopen(filename.c_str(), "wb");
     if (!fp) {
@@ -44,9 +44,15 @@ bool write_png_file(const std::string &filename, uint8_t *ptr, int width,
     png_init_io(png, fp);
 
     // Output is 8bit depth, RGBA format.
-    png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGBA,
-                 PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
-                 PNG_FILTER_TYPE_DEFAULT);
+    if (is_gray) {
+        png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_GRAY,
+                    PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+                    PNG_FILTER_TYPE_DEFAULT);
+    } else {
+        png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGBA,
+                    PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+                    PNG_FILTER_TYPE_DEFAULT);
+    }
     png_write_info(png, info);
 
     // To remove the alpha channel for PNG_COLOR_TYPE_RGB format,
@@ -60,7 +66,8 @@ bool write_png_file(const std::string &filename, uint8_t *ptr, int width,
 
     std::vector<uint8_t *> row_ptrs(height);
     for (int i = 0; i < height; ++i) {
-        row_ptrs[i] = ptr + i * width * 4;
+        int channels = is_gray ? 1 : 4;
+        row_ptrs[i]  = ptr + i * width * channels;
     }
 
     png_write_image(png, row_ptrs.data());

@@ -22,8 +22,6 @@ enum {
 
 // Rendering context for delta tracking 
 struct RenderContext {
-    struct BuffersIn;
-
     bool has_history = false;
     int spp = 0; // samples for current pose
     
@@ -41,9 +39,9 @@ struct RenderContext {
     // torch
     // torch::TensorOptions tensor_options =
     //     torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
-    // torch::Tensor rgba_noisy  = torch::Tensor();
-    // torch::Tensor depth_noisy = torch::Tensor();
-    std::shared_ptr<BuffersIn> buffers_in;
+    float4* rgba_noisy  = nullptr;
+    float*  depth_noisy = nullptr;
+    // std::shared_ptr<BuffersIn> buffers_in;
 
 public:
     RenderContext() = default;
@@ -83,7 +81,7 @@ public:
         // free tensors
         // rgba_noisy  = torch::Tensor();
         // depth_noisy = torch::Tensor();
-        buffers_in = nullptr;
+        // buffers_in = nullptr;
     }
 
     void resize(int width, int height) {

@@ -28,6 +28,15 @@ make -j12
 ```bash
 ./volrend_headless ../data/nerf_synthetic/lego/tree.npz ../data/nerf_synthetic/lego/transforms_val.json -o ../output_dir
 ```
+
+### Noisy data
+```bash
+SCENE=lego
+DATASET=test
+./volrend_headless ../data/nerf_synthetic/$SCENE/tree.npz ../data/nerf_synthetic/$SCENE/transforms_$DATASET.json -o .
+./data/nerf_synthetic/$SCENE/noisy/$DATASET
+```
+
 ---
 
 

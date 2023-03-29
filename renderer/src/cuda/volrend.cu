@@ -214,56 +214,70 @@ __global__ static void render_kernel(
         }
     }
 
-    if (!opt.delta_tracking) {
-        float rgbx_init[4];
-        if (!offscreen) {
-            // Read existing values for compositing (with meshes)
-            surf2Dread(
-                reinterpret_cast<float4*>(rgbx_init), 
-                surf_obj, 
-                x * (int)sizeof(float4),
-                y, 
-                cudaBoundaryModeZero);
-        }
-
-        // Compositing with existing color
-        const float nalpha = 1.f - out[3];
-        if (offscreen) {
-            const float remain = opt.background_brightness * nalpha;
-            out[0] += remain;
-            out[1] += remain;
-            out[2] += remain;
-        } else {
-            out[0] += rgbx_init[0] * nalpha;
-            out[1] += rgbx_init[1] * nalpha;
-            out[2] += rgbx_init[2] * nalpha;
-        }
-
-        // Output pixel color
-        float rgbx[4] = {
-            out[0],
-            out[1],
-            out[2],
-            1.0f
-        };
-        surf2Dwrite(
-            *reinterpret_cast<float4*>(rgbx),
-            surf_obj,
+    float rgbx_init[4];
+    if (!offscreen) {
+        // Read existing values for compositing (with meshes)
+        surf2Dread(
+            reinterpret_cast<float4*>(rgbx_init), 
+            surf_obj, 
             x * (int)sizeof(float4),
-            y,
-            cudaBoundaryModeZero); // squelches out-of-bound writes
-    } else {
-        // write float colors into delta tracking context
-        float&& alpha = 1.0f / ctx.spp;
-        float&& n_alpha = 1.0f - alpha;
-        float* dst = &ctx.data[CUR_RGBA][idx << 2];
-        dst[0] = out[0] * alpha + dst[0] * n_alpha;
-        dst[1] = out[1] * alpha + dst[1] * n_alpha;
-        dst[2] = out[2] * alpha + dst[2] * n_alpha;
-        dst[3] = out[3] * alpha + dst[3] * n_alpha;
+            y, 
+            cudaBoundaryModeZero);
+    }
 
-        float& dst_d = ctx.data[CUR_D][idx];
-        dst_d = depth * alpha + dst_d * n_alpha;
+    // Compositing with existing color
+    float alpha;
+    if (opt.delta_tracking) {
+        alpha = (out[3] > 0);
+    } else {
+        alpha = out[3];
+    }
+    const float nalpha = 1.f - alpha;
+    if (offscreen) {
+        const float remain = opt.background_brightness * nalpha;
+        out[0] += remain;
+        out[1] += remain;
+        out[2] += remain;
+    } else {
+        out[0] += rgbx_init[0] * nalpha;
+        out[1] += rgbx_init[1] * nalpha;
+        out[2] += rgbx_init[2] * nalpha;
+    }
+
+    // Output pixel color
+    float rgbx[4] = {
+        out[0],
+        out[1],
+        out[2],
+        1.0f
+    };
+    surf2Dwrite(
+        *reinterpret_cast<float4*>(rgbx),
+        surf_obj,
+        x * (int)sizeof(float4),
+        y,
+        cudaBoundaryModeZero); // squelches out-of-bound writes
+    
+    if (opt.delta_tracking) {
+        // write float colors into delta tracking context
+        // float&& alpha = 1.0f / ctx.spp;
+        // float&& n_alpha = 1.0f - alpha;
+        // float* dst = &ctx.data[CUR_RGBA][idx << 2];
+        // dst[0] = out[0] * alpha + dst[0] * n_alpha;
+        // dst[1] = out[1] * alpha + dst[1] * n_alpha;
+        // dst[2] = out[2] * alpha + dst[2] * n_alpha;
+        // dst[3] = out[3] * alpha + dst[3] * n_alpha;
+
+        // float& dst_d = ctx.data[CUR_D][idx];
+        // dst_d = depth * alpha + dst_d * n_alpha;
+
+        float4& rgba_noisy = ctx.rgba_noisy[idx];
+        rgba_noisy.x = out[0];
+        rgba_noisy.y = out[1];
+        rgba_noisy.z = out[2];
+        rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
+
+        ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
     }
 }
 
