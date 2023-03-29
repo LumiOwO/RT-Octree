@@ -6,6 +6,7 @@ class WandbLogger(BaseLogger):
     def __init__(self, args):
         wandb.init(project="my-awesome-project")
         args.wandb_name = wandb.run.name
+        args.work_dir = args.work_dir + f"_{args.wandb_name}"
 
         super().__init__(args)
         wandb.log(vars(args))

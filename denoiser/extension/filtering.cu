@@ -198,6 +198,10 @@ __global__ void applying(
     imgs_out[0] += rgb.x * w;
     imgs_out[1] += rgb.y * w;
     imgs_out[2] += rgb.z * w;
+    if (SUPPORT == 1) {
+        // imgs_out[3] = rgba_tile[ty + SUPPORT][tx + SUPPORT].w;
+        imgs_out[3] = 1.0f;
+    }
 
     // save for backward
     if (rgb_filtered != nullptr) {
@@ -453,7 +457,7 @@ public:
         // std::cout << (uint64_t)imgs_out.data_ptr() << std::endl;
 
         auto imgs_out = torch::zeros_like(imgs_in);  // [H, W, 4]
-        imgs_out.select(-1, 3).fill_(1); // set alpha channel to 1
+        // imgs_out.select(-1, 3).fill_(1); // set alpha channel to 1
         // std::cout << "imgs_out" << imgs_out << std::endl;
 
         // // weight normalization

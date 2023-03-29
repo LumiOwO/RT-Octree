@@ -2,10 +2,12 @@ from tqdm import tqdm
 import json
 
 import os
+from pathlib import Path
 import torchvision
 
 class BaseLogger():
     def __init__(self, args):
+        Path(args.work_dir).mkdir(parents=True, exist_ok=True)
         with open(os.path.join(args.work_dir, "args.json"), 'w') as f:
             json.dump(vars(args), f, indent=2)
 

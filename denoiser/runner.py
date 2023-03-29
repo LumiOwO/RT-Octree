@@ -67,10 +67,12 @@ class Runner(object):
 
     def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler):
         avg_loss = 0
-        for batch_idx, (buffers_in, imgs_gt) in enumerate(dataloader):
+        for batch_idx, (buffers_in, img_in, img_gt) in enumerate(dataloader):
             optimizer.zero_grad(set_to_none=True)
-            imgs_out = model.forward(buffers_in, requires_grad=True)
-            loss = self.loss_fn(imgs_out[..., :3], imgs_gt[..., :3])
+
+            img_out = model.forward(buffers_in, img_in, requires_grad=True)
+
+            loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
             loss.backward()
             optimizer.step()
             avg_loss += loss.item()
@@ -117,14 +119,15 @@ class Runner(object):
         os.makedirs(save_dir, exist_ok=True)
         avg_loss = 0
         avg_psnr = 0
-        for batch_idx, (buffers_in, imgs_gt) in enumerate(tqdm(dataloader)):
+        for batch_idx, (buffers_in, img_in, img_gt) in enumerate(tqdm(dataloader)):
             # B == 1 in test
-            img_out = model.forward(buffers_in)
-            # print(imgs_out.shape)
-            # print(imgs_gt.shape)
-            loss = self.loss_fn(img_out[..., :3], imgs_gt[..., :3])
+            img_out = model.forward(buffers_in, img_in)
+
+            loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
             avg_loss += loss.item()
-            avg_psnr += psnr(img_out[..., :3], imgs_gt[..., :3])
+            avg_psnr += psnr(img_out[..., :3], img_gt[..., :3])
+
+            img_out[..., -1:] = 1
             self.logger.log_image(img_out, save_dir, "r", batch_idx, {"epoch": self.epoch})
 
 

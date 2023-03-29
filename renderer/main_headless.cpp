@@ -310,46 +310,53 @@ int main(int argc, char *argv[])
         //           << rgba_noisy.select(2, 3).max() << std::endl;
         // std::cout << "depth_noisy " << depth_noisy.min() << ", "
         //           << depth_noisy.max() << std::endl;
-        if (out_dir.size())
+        if (!out_dir.size()) {
+            continue;
+        }
+
         {
-            // cuda(Memcpy2DFromArrayAsync(buf.data(), sizeof(float4) * width, array, 0, 0,
-            //                             sizeof(float4) * width, height,
-            //                             cudaMemcpyDeviceToHost, stream));
-            // auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-            // for (int j = 0; j < buf.size(); j++)
-            // {
-            //     buf_uint8[j] = buf[j] * 255;
-            // }
-            // std::string fpath = out_dir + "/" + basenames[i] + ".png";
-            // internal::write_png_file(fpath, buf_uint8.data(), width, height);
-            {
-                cuda(Memcpy(
-                    buf.data(),
-                    rgba_noisy.data_ptr(),
-                    sizeof(float4) * width * height,
-                    cudaMemcpyDeviceToHost));
-                auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-                for (int j = 0; j < buf_uint8.size(); j++) {
-                    buf_uint8[j] = buf[j] * 255;
-                }
-                std::string fpath = out_dir + "/rgba_" + basenames[i] + ".png";
-                internal::write_png_file(
-                    fpath, buf_uint8.data(), width, height);
+            cuda(Memcpy2DFromArray(
+                buf.data(),
+                sizeof(float4) * width,
+                array,
+                0,
+                0,
+                sizeof(float4) * width,
+                height,
+                cudaMemcpyDeviceToHost));
+            auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
+            for (int j = 0; j < buf.size(); j++) {
+                buf_uint8[j] = buf[j] * 255;
             }
-            {
-                cuda(Memcpy(
-                    buf.data(),
-                    depth_noisy.data_ptr(),
-                    sizeof(float) * width * height,
-                    cudaMemcpyDeviceToHost));
-                auto buf_uint8 = std::vector<uint8_t>(width * height);
-                for (int j = 0; j < buf_uint8.size(); j++) {
-                    buf_uint8[j] = buf[j] * 255;
-                }
-                std::string fpath = out_dir + "/depth_" + basenames[i] + ".png";
-                internal::write_png_file(
-                    fpath, buf_uint8.data(), width, height, true);
+            std::string fpath = out_dir + "/" + basenames[i] + ".png";
+            internal::write_png_file(fpath, buf_uint8.data(), width, height);
+        }
+        {
+            cuda(Memcpy(
+                buf.data(),
+                rgba_noisy.data_ptr(),
+                sizeof(float4) * width * height,
+                cudaMemcpyDeviceToHost));
+            auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
+            for (int j = 0; j < buf_uint8.size(); j++) {
+                buf_uint8[j] = buf[j] * 255;
             }
+            std::string fpath = out_dir + "/rgba_" + basenames[i] + ".png";
+            internal::write_png_file(fpath, buf_uint8.data(), width, height);
+        }
+        {
+            cuda(Memcpy(
+                buf.data(),
+                depth_noisy.data_ptr(),
+                sizeof(float) * width * height,
+                cudaMemcpyDeviceToHost));
+            auto buf_uint8 = std::vector<uint8_t>(width * height);
+            for (int j = 0; j < buf_uint8.size(); j++) {
+                buf_uint8[j] = buf[j] * 255;
+            }
+            std::string fpath = out_dir + "/depth_" + basenames[i] + ".png";
+            internal::write_png_file(
+                fpath, buf_uint8.data(), width, height, true);
         }
     }
     cudaEventRecord(stop);

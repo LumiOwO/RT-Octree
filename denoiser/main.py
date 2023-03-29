@@ -1,7 +1,6 @@
 import torch
 
 import os
-from pathlib import Path
 
 from denoiser.utils import seed_everything
 from denoiser.runner import Runner
@@ -21,7 +20,6 @@ def main(args):
     assert device.type == "cuda", "CPU-only not supported."
 
     # Logger
-    Path(args.work_dir).mkdir(parents=True, exist_ok=True)
     if args.use_wandb:
         logger = WandbLogger(args)
     else:
