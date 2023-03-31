@@ -5,7 +5,7 @@ import gc
 from tqdm import tqdm, trange
 from denoiser.utils import load_checkpoint
 from denoiser.network import compact_and_compile
-from denoiser.metrics import psnr, smape
+from denoiser.metrics import get_loss_fn, psnr
 
 class Runner(object):
     def __init__(self, args, dataset, logger, device=None):
@@ -21,12 +21,7 @@ class Runner(object):
                 optimizer, lambda epoch: 0.1 ** min(epoch / (self.args.epochs + 1), 1))
         # self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.StepLR(
         #         optimizer, step_size=30, gamma=0.1)
-        if args.loss_fn == "mse":
-            self.loss_fn = torch.nn.MSELoss()
-        elif args.loss_fn == "smape":
-            self.loss_fn = smape
-        else:
-            raise NotImplementedError("Invalid loss funtion.")
+        self.loss_fn = get_loss_fn(args.loss_fn, device)
 
         self.epoch = 0
 

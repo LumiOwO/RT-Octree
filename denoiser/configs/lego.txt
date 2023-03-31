@@ -14,4 +14,4 @@ in_channels = 5
 mid_channels = 14
 num_layers = 6
 kernel_levels = 6
-loss_fn = smape
+loss_fn = lpips_vgg
