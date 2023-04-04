@@ -275,7 +275,8 @@ __global__ static void render_kernel(
         rgba_noisy.x = out[0];
         rgba_noisy.y = out[1];
         rgba_noisy.z = out[2];
-        rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
+        // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
+        rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
 
         ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
     }

@@ -111,7 +111,7 @@ if __name__ == "__main__":
                         help="do not reload weights from saved ckpt")
     parser.add_argument("--ft_path", type=str, default=None, 
                         help="specific weights npy file to reload for coarse network")
-    
+
     parser.add_argument("--num_workers", type=int, default=12, 
                         help="num_workers for dataloader")
 

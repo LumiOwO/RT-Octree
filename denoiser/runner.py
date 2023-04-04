@@ -5,7 +5,8 @@ import gc
 from tqdm import tqdm, trange
 from denoiser.utils import load_checkpoint
 from denoiser.network import compact_and_compile
-from denoiser.metrics import get_loss_fn, psnr
+from denoiser.metrics import get_loss_fn
+from denoiser.metrics import PSNRMetric, SSIMMetric, LPIPSMetric
 
 class Runner(object):
     def __init__(self, args, dataset, logger, device=None):
@@ -22,6 +23,15 @@ class Runner(object):
         # self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.StepLR(
         #         optimizer, step_size=30, gamma=0.1)
         self.loss_fn = get_loss_fn(args.loss_fn, device)
+
+        # Metrics
+        if args.task == "train" or args.task == "test":
+            self.metrics = [
+                PSNRMetric(), 
+                SSIMMetric(), 
+                LPIPSMetric("alex", device), 
+                LPIPSMetric("vgg", device),
+            ]
 
         self.epoch = 0
 
@@ -112,27 +122,27 @@ class Runner(object):
         # batch_size == 1 when testing
         save_dir = os.path.join(self.args.work_dir, save_dirname)
         os.makedirs(save_dir, exist_ok=True)
+
+        for m in self.metrics:
+            m.reset()
         avg_loss = 0
-        avg_psnr = 0
         for batch_idx, (buffers_in, img_in, img_gt) in enumerate(tqdm(dataloader)):
             # B == 1 in test
             img_out = model.forward(buffers_in, img_in)
 
             loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
             avg_loss += loss.item()
-            avg_psnr += psnr(img_out[..., :3], img_gt[..., :3])
+            for m in self.metrics:
+                m.measure(img_out[..., :3], img_gt[..., :3])
 
             img_out[..., -1:] = 1
             self.logger.log_image(img_out, save_dir, "r", batch_idx, {"epoch": self.epoch})
 
-
-        size = len(dataloader)
-        avg_loss = avg_loss / size
-        avg_psnr = avg_psnr / size
+        avg_loss = avg_loss / len(dataloader)
         self.logger.log({
             "epoch": self.epoch,
             "test/loss": avg_loss,
-            "test/psnr": avg_psnr,
+            **{f"test/{m.name()}": m.result() for m in self.metrics}
         })
 
     def compact(self, model):

@@ -10,8 +10,8 @@ i_print = 1
 i_save = 100
 i_test = 100
 
-in_channels = 5
+in_channels = 4
 mid_channels = 14
 num_layers = 6
 kernel_levels = 6
-loss_fn = lpips_vgg
+loss_fn = smape

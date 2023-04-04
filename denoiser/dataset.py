@@ -45,11 +45,11 @@ class DenoiserDataset():
             for frame in tqdm(meta["frames"]):
                 name = os.path.basename(frame["file_path"])
                 rgba = imageio.imread(
-                    os.path.join(args.data_dir, "noisy", s, "rgba_" + name + ".png"))
+                    os.path.join(args.data_dir, "temp", s, "rgba_" + name + ".png"))
                 depth = imageio.imread(
-                    os.path.join(args.data_dir, "noisy", s, "depth_" + name + ".png"))
+                    os.path.join(args.data_dir, "temp", s, "depth_" + name + ".png"))
                 img_in = imageio.imread(
-                    os.path.join(args.data_dir, "noisy", s, name + ".png"))
+                    os.path.join(args.data_dir, "temp", s, name + ".png"))
                 img_gt = imageio.imread(
                     os.path.join(args.data_dir, s, name + ".png"))
 
@@ -69,7 +69,7 @@ class DenoiserDataset():
 
             tqdm.write("Moving to cuda...")
             self.buffers_in[s] = torch.stack([
-                torch.from_numpy(x).permute(2, 0, 1).contiguous() # [C, H, W]
+                torch.from_numpy(x)[..., :args.in_channels].permute(2, 0, 1).contiguous() # [C, H, W]
                 for x in buffers_in_list]).to(device)
             self.imgs_in[s] = torch.stack([
                 torch.from_numpy(x) # [H, W, 4]

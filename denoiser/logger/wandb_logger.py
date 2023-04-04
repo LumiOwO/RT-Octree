@@ -4,7 +4,7 @@ from .base_logger import BaseLogger
 
 class WandbLogger(BaseLogger):
     def __init__(self, args):
-        wandb.init(project="my-awesome-project")
+        wandb.init(project=args.exp_name)
         args.wandb_name = wandb.run.name
         args.work_dir = os.path.join(args.work_dir, args.wandb_name)
 

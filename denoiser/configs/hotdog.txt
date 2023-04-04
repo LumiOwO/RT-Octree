@@ -1,15 +1,17 @@
-expname = hotdog_test
-basedir = ./logs
-datadir = ./data/nerf_llff_data/hotdog
-dataset_type = llff
+logs_root = ./logs
+exp_name = hotdog
+data_dir = ./data/nerf_synthetic/hotdog
+use_wandb = true
 
-factor = 8
-llffhold = 8
+lr = 0.00005
+epochs = 2000
+batch_size = 1
+i_print = 1
+i_save = 100
+i_test = 100
 
-N_rand = 1024
-N_samples = 64
-N_importance = 64
-
-use_viewdirs = True
-raw_noise_std = 1e0
-
+in_channels = 4
+mid_channels = 14
+num_layers = 6
+kernel_levels = 6
+loss_fn = smape
