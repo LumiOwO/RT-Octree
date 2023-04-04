@@ -206,9 +206,17 @@ __global__ static void render_kernel(
         rodrigues(opt.rot_dirs, vdir);
 
         if (opt.delta_tracking) {
-            ctx.rng.advance(idx); // init random number generator
-            const float dst = -__logf(1.0f - ctx.rng.next_float());
-            delta_trace_ray(tree, dir, vdir, cen, opt, t_max, out, dst, depth);
+            constexpr int spp = 1;
+            constexpr float inv_spp = 1.0f / spp;
+            ctx.rng.advance(idx * spp);  // init random number generator
+            // const float dst = -__logf(1.0f - ctx.rng.next_float());
+            delta_trace_ray<float, 1>(
+                tree, dir, vdir, cen, opt, t_max, out, ctx.rng, depth);
+
+            out[0] *= inv_spp;
+            out[1] *= inv_spp;
+            out[2] *= inv_spp;
+            out[3] *= inv_spp;
         } else {
             trace_ray(tree, dir, vdir, cen, opt, t_max, out);
         }
@@ -226,13 +234,14 @@ __global__ static void render_kernel(
     }
 
     // Compositing with existing color
-    float alpha;
-    if (opt.delta_tracking) {
-        alpha = (out[3] > 0);
-    } else {
-        alpha = out[3];
-    }
-    const float nalpha = 1.f - alpha;
+    // float alpha;
+    // if (opt.delta_tracking) {
+    //     alpha = (out[3] > 0);
+    // } else {
+    //     alpha = out[3];
+    // }
+    // const float nalpha = 1.f - alpha;
+    const float nalpha = 1.f - out[3];
     if (offscreen) {
         const float remain = opt.background_brightness * nalpha;
         out[0] += remain;
@@ -275,11 +284,154 @@ __global__ static void render_kernel(
         rgba_noisy.x = out[0];
         rgba_noisy.y = out[1];
         rgba_noisy.z = out[2];
+        rgba_noisy.w = out[3];
         // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
-        rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
+        // rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
 
         ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
     }
+}
+
+template <int SPP>
+__global__ static void render_kernel_delta_trace(
+    cudaSurfaceObject_t surf_obj,
+    cudaSurfaceObject_t surf_obj_depth,
+    CameraSpec          cam,
+    TreeSpec            tree,
+    RenderOptions       opt,
+    float*              probe_coeffs,
+    RenderContext       ctx,  // use value, not reference
+    bool                offscreen) {
+    CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
+
+    const int x = idx % cam.width, y = idx / cam.width;
+    float     dir[3], cen[3], out[4];
+
+    bool      enable_draw = tree.N > 0;
+    out[0] = out[1] = out[2] = out[3] = 0.f;
+    if (opt.enable_probe && y < opt.probe_disp_size + 5 &&
+        x >= cam.width - opt.probe_disp_size - 5) {
+        // Draw probe circle
+        float basis_fn[VOLREND_GLOBAL_BASIS_MAX];
+        int   xx = x - (cam.width - opt.probe_disp_size) + 5;
+        int   yy = y - 5;
+        cen[0]   = -(xx / (0.5f * opt.probe_disp_size) - 1.f);
+        cen[1]   = (yy / (0.5f * opt.probe_disp_size) - 1.f);
+
+        float c  = cen[0] * cen[0] + cen[1] * cen[1];
+        if (c <= 1.f) {
+            enable_draw = false;
+            if (tree.data_format.basis_dim >= 0) {
+                cen[2] = -sqrtf(1 - c);
+                _mv3(cam.transform, cen, dir);
+
+                internal::maybe_precalc_basis(tree, dir, basis_fn);
+                for (int t = 0; t < 3; ++t) {
+                    int   off = t * tree.data_format.basis_dim;
+                    float tmp = 0.f;
+                    for (int i = opt.basis_minmax[0]; i <= opt.basis_minmax[1];
+                         ++i) {
+                        tmp += basis_fn[i] * probe_coeffs[off + i];
+                    }
+                    out[t] = 1.f / (1.f + expf(-tmp));
+                }
+                out[3] = 1.f;
+            } else {
+                for (int i = 0; i < 3; ++i) out[i] = probe_coeffs[i];
+                out[3] = 1.f;
+            }
+        } else {
+            out[0] = out[1] = out[2] = 0.f;
+        }
+    }
+    float t_max = 1e9f;
+    float depth = 0;
+    if (enable_draw) {
+        screen2worlddir(x, y, cam, dir, cen);
+        // out[3]=1.f;
+        float vdir[3] = {dir[0], dir[1], dir[2]};
+        maybe_world2ndc(tree, dir, cen);
+        for (int i = 0; i < 3; ++i) {
+            cen[i] = tree.offset[i] + tree.scale[i] * cen[i];
+        }
+
+        if (!offscreen) {
+            surf2Dread(
+                &t_max,
+                surf_obj_depth,
+                x * sizeof(float),
+                y,
+                cudaBoundaryModeZero);
+        }
+
+        rodrigues(opt.rot_dirs, vdir);
+
+        constexpr float INV_SPP = 1.0f / SPP;
+        ctx.rng.advance(idx * SPP);  // init random number generator
+        // const float dst = -__logf(1.0f - ctx.rng.next_float());
+        delta_trace_ray<float, SPP>(
+            tree, dir, vdir, cen, opt, t_max, out, ctx.rng, depth);
+
+        out[0] *= INV_SPP;
+        out[1] *= INV_SPP;
+        out[2] *= INV_SPP;
+        out[3] *= INV_SPP;
+    }
+
+    float rgbx_init[4];
+    if (!offscreen) {
+        // Read existing values for compositing (with meshes)
+        surf2Dread(
+            reinterpret_cast<float4*>(rgbx_init),
+            surf_obj,
+            x * (int)sizeof(float4),
+            y,
+            cudaBoundaryModeZero);
+    }
+
+    // Compositing with existing color
+    const float nalpha = 1.f - out[3];
+    if (offscreen) {
+        const float remain = opt.background_brightness * nalpha;
+        out[0] += remain;
+        out[1] += remain;
+        out[2] += remain;
+    } else {
+        out[0] += rgbx_init[0] * nalpha;
+        out[1] += rgbx_init[1] * nalpha;
+        out[2] += rgbx_init[2] * nalpha;
+    }
+
+    // Output pixel color
+    float rgbx[4] = {out[0], out[1], out[2], 1.0f};
+    surf2Dwrite(
+        *reinterpret_cast<float4*>(rgbx),
+        surf_obj,
+        x * (int)sizeof(float4),
+        y,
+        cudaBoundaryModeZero);  // squelches out-of-bound writes
+
+    // write float colors into delta tracking context
+    // float&& alpha = 1.0f / ctx.spp;
+    // float&& n_alpha = 1.0f - alpha;
+    // float* dst = &ctx.data[CUR_RGBA][idx << 2];
+    // dst[0] = out[0] * alpha + dst[0] * n_alpha;
+    // dst[1] = out[1] * alpha + dst[1] * n_alpha;
+    // dst[2] = out[2] * alpha + dst[2] * n_alpha;
+    // dst[3] = out[3] * alpha + dst[3] * n_alpha;
+
+    // float& dst_d = ctx.data[CUR_D][idx];
+    // dst_d = depth * alpha + dst_d * n_alpha;
+
+    float4& rgba_noisy = ctx.rgba_noisy[idx];
+    rgba_noisy.x       = out[0];
+    rgba_noisy.y       = out[1];
+    rgba_noisy.z       = out[2];
+    rgba_noisy.w       = out[3];
+    // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
+    // rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
+
+    ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
 }
 
 __global__ static void retrieve_cursor_lumisphere_kernel(
@@ -560,18 +712,85 @@ __host__ void launch_renderer(const N3Tree& tree,
     }
 
     // render
-    device::render_kernel<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-            surf_obj,
-            surf_obj_depth,
-            cam,
-            tree,
-            options,
-            probe_coeffs,
-            ctx,
-            offscreen
-    );
-
     if (options.delta_tracking) {
+        switch (options.spp) {
+            case 1:
+                device::render_kernel_delta_trace<1>
+                    <<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                        surf_obj,
+                        surf_obj_depth,
+                        cam,
+                        tree,
+                        options,
+                        probe_coeffs,
+                        ctx,
+                        offscreen);
+                break;
+            case 2:
+                device::render_kernel_delta_trace<2>
+                    <<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                        surf_obj,
+                        surf_obj_depth,
+                        cam,
+                        tree,
+                        options,
+                        probe_coeffs,
+                        ctx,
+                        offscreen);
+                break;
+            case 3:
+                device::render_kernel_delta_trace<3>
+                    <<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                        surf_obj,
+                        surf_obj_depth,
+                        cam,
+                        tree,
+                        options,
+                        probe_coeffs,
+                        ctx,
+                        offscreen);
+                break;
+            case 4:
+                device::render_kernel_delta_trace<4>
+                    <<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                        surf_obj,
+                        surf_obj_depth,
+                        cam,
+                        tree,
+                        options,
+                        probe_coeffs,
+                        ctx,
+                        offscreen);
+                break;
+            case 8:
+                device::render_kernel_delta_trace<8>
+                    <<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                        surf_obj,
+                        surf_obj_depth,
+                        cam,
+                        tree,
+                        options,
+                        probe_coeffs,
+                        ctx,
+                        offscreen);
+                break;
+            case 16:
+                device::render_kernel_delta_trace<16>
+                    <<<blocks, N_CUDA_THREADS, 0, stream>>>(
+                        surf_obj,
+                        surf_obj_depth,
+                        cam,
+                        tree,
+                        options,
+                        probe_coeffs,
+                        ctx,
+                        offscreen);
+                break;
+            default:
+                throw std::runtime_error(
+                    "spp == " + std::to_string(options.spp) +
+                    " not supported.");
+        }
         // // temporal denoise
         // device::temporal_accumulate<<<blocks, N_CUDA_THREADS, 0, stream>>>(
         //     surf_obj,
@@ -593,6 +812,17 @@ __host__ void launch_renderer(const N3Tree& tree,
 
         // update rng
         ctx.rng.advance();
+    } else {
+
+        device::render_kernel<<<blocks, N_CUDA_THREADS, 0, stream>>>(
+            surf_obj,
+            surf_obj_depth,
+            cam,
+            tree,
+            options,
+            probe_coeffs,
+            ctx,
+            offscreen);
     }
 
     if (options.enable_probe) {

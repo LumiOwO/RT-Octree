@@ -57,6 +57,7 @@ struct RenderOptions {
     RenderContext* p_ctx = nullptr;
     bool delta_tracking = true;
     bool denoise = true;
+    int spp = 1;
     // denoise
     bool clamp = true;
     int clamp_support = 2;
@@ -82,8 +83,11 @@ struct RenderOptions {
         enable_probe,
         probe,
         probe_disp_size,
+
         delta_tracking,
-        denoise);
+        denoise,
+        spp
+        );
 };
 
 }  // namespace volrend

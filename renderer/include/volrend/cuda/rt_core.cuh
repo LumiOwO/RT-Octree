@@ -10,6 +10,7 @@
 #include "volrend/internal/lumisphere.hpp"
 #include "volrend/internal/morton.hpp"
 #include <cstdio>
+#include <cfloat>
 
 namespace volrend {
 namespace device {
@@ -198,17 +199,145 @@ __device__ __inline__ void trace_ray(
     }
 }
 
-template<typename scalar_t>
+template <int SPP>
+__device__ __forceinline__ void sample_dst_recursive(
+    float* __restrict__ dst,
+    pcg32& rng) {
+
+    sample_dst_recursive<SPP - 1>(dst, rng);
+
+    float t = -__logf(1.0f - rng.next_float());
+    if (t <= dst[0]) {
+        for (int i = SPP - 1; i > 0; i--) {
+            dst[i] = dst[i - 1];
+        }
+        dst[0] = t;
+    } else {
+        int i = SPP - 1;
+        while (dst[i - 1] > t) {
+            dst[i] = dst[i - 1];
+            i--;
+        }
+        dst[i] = t;
+    }
+}
+
+template <>
+__device__ __forceinline__ void sample_dst_recursive<1>(
+    float* __restrict__ dst,
+    pcg32& rng) {
+
+    dst[0] = -__logf(1.0f - rng.next_float());
+}
+
+template <>
+__device__ __forceinline__ void sample_dst_recursive<2>(
+    float* __restrict__ dst,
+    pcg32& rng) {
+
+    dst[0] = -__logf(1.0f - rng.next_float());
+
+    float t = -__logf(1.0f - rng.next_float());
+    if (t >= dst[0]) {
+        dst[1] = t;
+    } else {
+        dst[1] = dst[0];
+        dst[0] = t;
+    }
+}
+
+template <>
+__device__ __forceinline__ void sample_dst_recursive<3>(
+    float* __restrict__ dst,
+    pcg32& rng) {
+
+    dst[0]  = -__logf(1.0f - rng.next_float());
+
+    float t = -__logf(1.0f - rng.next_float());
+    if (t >= dst[0]) {
+        dst[1] = t;
+    } else {
+        dst[1] = dst[0];
+        dst[0] = t;
+    }
+
+    t = -__logf(1.0f - rng.next_float());
+    if (t >= dst[1]) {
+        dst[2] = t;
+    } else if (t >= dst[0]) {
+        dst[2] = dst[1];
+        dst[1] = t;
+    } else {
+        dst[2] = dst[1];
+        dst[1] = dst[0];
+        dst[0] = t;
+    }
+}
+
+template <>
+__device__ __forceinline__ void sample_dst_recursive<4>(
+    float* __restrict__ dst,
+    pcg32& rng) {
+
+    dst[0]  = -__logf(1.0f - rng.next_float());
+
+    float t = -__logf(1.0f - rng.next_float());
+    if (t >= dst[0]) {
+        dst[1] = t;
+    } else {
+        dst[1] = dst[0];
+        dst[0] = t;
+    }
+
+    t = -__logf(1.0f - rng.next_float());
+    if (t >= dst[1]) {
+        dst[2] = t;
+    } else if (t >= dst[0]) {
+        dst[2] = dst[1];
+        dst[1] = t;
+    } else {
+        dst[2] = dst[1];
+        dst[1] = dst[0];
+        dst[0] = t;
+    }
+
+    t = -__logf(1.0f - rng.next_float());
+    if (t >= dst[2]) {
+        dst[3] = t;
+    } else if (t >= dst[1]) {
+        dst[3] = dst[2];
+        dst[2] = t;
+    } else if (t >= dst[0]) {
+        dst[3] = dst[2];
+        dst[2] = dst[1];
+        dst[1] = t;
+    } else {
+        dst[3] = dst[2];
+        dst[2] = dst[1];
+        dst[1] = dst[0];
+        dst[0] = t;
+    }
+}
+
+template <int SPP>
+__device__ __forceinline__ void sample_dst(
+    float* __restrict__ dst,
+    pcg32& rng) {
+    sample_dst_recursive<SPP>(dst, rng);
+    dst[SPP] = FLT_MAX;
+}
+
+template <typename scalar_t, int SPP>
 __device__ __inline__ void delta_trace_ray(
-        const internal::TreeSpec& __restrict__ tree,
-        scalar_t* __restrict__ dir,
-        const scalar_t* __restrict__ vdir,
-        const scalar_t* __restrict__ cen,
-        RenderOptions opt,
-        float tmax_bg,
-        scalar_t* __restrict__ out,
-        const float& dst,
-        float& depth) {
+    const internal::TreeSpec& __restrict__ tree,
+    scalar_t* __restrict__ dir,
+    const scalar_t* __restrict__ vdir,
+    const scalar_t* __restrict__ cen,
+    RenderOptions opt,
+    float         tmax_bg,
+    scalar_t* __restrict__ out,
+    pcg32& rng,
+    float& depth) {
 
     const float delta_scale = _get_delta_scale(
             tree.scale, /*modifies*/ dir);
@@ -241,8 +370,13 @@ __device__ __inline__ void delta_trace_ray(
         scalar_t t = tmin;
         scalar_t cube_sz;
         float src = 0;
+
+        float dst[SPP + 1];
+        sample_dst<SPP>(dst, rng);
+        int idx = 0;
+
         //int step = 0;
-        while (t < tmax) {
+        while (t < tmax && idx < SPP) {
             //step++;
             pos[0] = cen[0] + t * dir[0];
             pos[1] = cen[1] + t * dir[1];
@@ -255,13 +389,19 @@ __device__ __inline__ void delta_trace_ray(
             if (__half2float(tree_val[tree.data_dim - 1]) > opt.sigma_thresh) {
                 float sigma = __half2float(tree_val[tree.data_dim - 1]);
                 const float delta = delta_t * delta_scale * sigma;
-                if (src + delta >= dst) {
+                if (src + delta >= dst[idx]) {
+                    float cnt = 0;
+                    do {
+                        ++cnt;
+                        ++idx;
+                    } while (src + delta >= dst[idx]);
+
                     depth = t;
                     if (opt.render_depth) {
-                        out[0] = t;
-                        out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
-                        out[3] = sigma;
-                        return;
+                        out[0] += t * cnt;
+                        // out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
+                        out[3] += cnt;
+                        goto end_cell;
                     } else {
                         if (tree.data_format.basis_dim >= 0) {
                             int off = 0;
@@ -301,20 +441,21 @@ __device__ __inline__ void delta_trace_ray(
                                             MUL_BASIS_I(2) +
                                             MUL_BASIS_I(3);
                                 }
-                                out[t] = 1.f / (1.f + expf(-tmp));
+                                out[t] += cnt / (1.f + __expf(-tmp));
                                 off += tree.data_format.basis_dim;
                             }
 #undef MUL_BASIS_I
                         } else {
                             for (int j = 0; j < 3; ++j) {
-                                out[j] = __half2float(tree_val[j]);
+                                out[j] += __half2float(tree_val[j]) * cnt;
                             }
                         }
                     }
 
-                    out[3] = sigma;
-                    return;
+                    out[3] += cnt;
+                    goto end_cell;
                 }
+            end_cell:
                 src += delta;
             }
             t += delta_t;

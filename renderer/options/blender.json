@@ -1,0 +1,36 @@
+{
+  "background_brightness": 1.0,
+  "basis_minmax": [
+    0,
+    24
+  ],
+  "delta_tracking": true,
+  "denoise": false,
+  "spp": 16,
+  "enable_probe": false,
+  "grid_max_depth": 4,
+  "probe": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "probe_disp_size": 100,
+  "render_bbox": [
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "render_depth": false,
+  "rot_dirs": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "show_grid": false,
+  "sigma_thresh": 0.009999999776482582,
+  "step_size": 9.999999747378752e-05,
+  "stop_thresh": 0.009999999776482582
+}

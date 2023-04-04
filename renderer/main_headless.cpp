@@ -269,7 +269,7 @@ int main(int argc, char *argv[])
 
     // options
     // RenderOptions options = internal::render_options_from_args(args);
-    auto f_options = std::ifstream(args["file"].as<std::string>() + "pretty.json");
+    auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
     json j_options = json::parse(f_options);
     RenderOptions options = j_options;
     // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
