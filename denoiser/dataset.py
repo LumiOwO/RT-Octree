@@ -45,11 +45,11 @@ class DenoiserDataset():
             for frame in tqdm(meta["frames"]):
                 name = os.path.basename(frame["file_path"])
                 rgba = imageio.imread(
-                    os.path.join(args.data_dir, "temp", s, "rgba_" + name + ".png"))
+                    os.path.join(args.data_dir, f"spp_{args.spp}", s, "rgba_" + name + ".png"))
                 depth = imageio.imread(
-                    os.path.join(args.data_dir, "temp", s, "depth_" + name + ".png"))
+                    os.path.join(args.data_dir, f"spp_{args.spp}", s, "depth_" + name + ".png"))
                 img_in = imageio.imread(
-                    os.path.join(args.data_dir, "temp", s, name + ".png"))
+                    os.path.join(args.data_dir, f"spp_{args.spp}", s, name + ".png"))
                 img_gt = imageio.imread(
                     os.path.join(args.data_dir, s, name + ".png"))
 

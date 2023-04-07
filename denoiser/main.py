@@ -58,6 +58,8 @@ if __name__ == "__main__":
                         help="experiment name")
     parser.add_argument("--data_dir", type=str, default="../data/nerf_synthetic/lego", 
                         help="input data directory")
+    parser.add_argument("--spp", type=int, default=1, 
+                        help="use which spp noisy input")
 
     # logging/saving options
     parser.add_argument("--use_wandb", action="store_true",  

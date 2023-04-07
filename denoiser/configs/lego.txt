@@ -1,6 +1,7 @@
 logs_root = ./logs
 exp_name = lego
 data_dir = ./data/nerf_synthetic/lego
+spp = 4
 use_wandb = true
 
 lr = 0.00005

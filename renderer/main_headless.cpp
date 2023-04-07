@@ -11,6 +11,14 @@
 #include <string>
 #include <vector>
 
+#if __has_include(<filesystem>)
+#include <filesystem>
+namespace fs = std::filesystem;
+#else
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#endif
+
 #include "volrend/common.hpp"
 #include "volrend/denoiser/denoiser.hpp"
 #include "volrend/internal/auto_filesystem.hpp"
@@ -119,6 +127,8 @@ int main(int argc, char *argv[])
                 cxxopts::value<float>()->default_value("1"))
         ("max_imgs", "max images to render, default no limit",
                 cxxopts::value<int>()->default_value("0"))
+        ("dataset", "dataset type",
+                cxxopts::value<std::string>()->default_value("blender"))
         ;
     // clang-format on
 
@@ -175,25 +185,56 @@ int main(int argc, char *argv[])
     //     }
     // }
     assert(args.unmatched().size() == 1);
-    json poses = json::parse(std::ifstream(args.unmatched()[0]));
-    float camera_angle_x = poses["camera_angle_x"];
-    fx = fy = 0.5f * width / tanf(0.5f * camera_angle_x);
-    auto& frames = poses["frames"];
-    for (int i = 0; i < frames.size(); i++) {
-        auto &m = frames[i]["transform_matrix"];
-        glm::mat4x3 tmp;
-        // transpose
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 4; j++) {
-                tmp[j][i] = m[i][j];
+    std::string dataset_type = args["dataset"].as<std::string>();
+    if (dataset_type == "blender") {
+        json  poses          = json::parse(std::ifstream(args.unmatched()[0]));
+        float camera_angle_x = poses["camera_angle_x"];
+        fx = fy      = 0.5f * width / tanf(0.5f * camera_angle_x);
+
+        auto &frames = poses["frames"];
+        for (int i = 0; i < frames.size(); i++) {
+            auto &m = frames[i]["transform_matrix"];
+            // transpose
+            glm::mat4x3 tmp;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 4; j++) {
+                    tmp[j][i] = m[i][j];
+                }
+            }
+            trans.emplace_back(tmp);
+            basenames.push_back("r_" + std::to_string(i));
+        }
+    } else if (dataset_type == "tt") {
+        width = 1920;
+        height = 1080;
+
+        auto data_path = fs::path(args.unmatched()[0]);
+
+        // Load intrin matrix
+        auto intrin_path = data_path / "intrinsics.txt";
+        read_intrins(intrin_path.string(), fx, fy);
+
+        // Load poses
+        auto poses_path = data_path / "pose";
+        for (const auto &entry : fs::directory_iterator(poses_path)) {
+            auto path = entry.path();
+
+            int cnt = read_transform_matrices(path.string(), trans);
+            std::string fname = remove_ext(path.filename().string());
+            if (cnt == 1) {
+                basenames.push_back(fname);
+            } else {
+                for (int i = 0; i < cnt; ++i) {
+                    std::string tmp = std::to_string(i);
+                    while (tmp.size() < 6)
+                        tmp = "0" + tmp;
+                    basenames.push_back(fname + "_" + tmp);
+                }
             }
         }
-        trans.emplace_back(tmp);
-        basenames.push_back("r_" + std::to_string(i));
     }
 
-    if (args["reverse_yz"].as<bool>())
-    {
+    if (dataset_type == "tt" || args["reverse_yz"].as<bool>()) {
         puts("INFO: Use OpenCV camera convention\n");
         // clang-format off
         glm::mat4x4 cam_trans(1, 0, 0, 0,
@@ -205,9 +246,7 @@ int main(int argc, char *argv[])
         {
             transform = transform * cam_trans;
         }
-    }
-    else
-    {
+    } else {
         puts("INFO: Use NeRF camera convention\n");
     }
 
@@ -268,14 +307,20 @@ int main(int argc, char *argv[])
     cudaEventCreate(&stop);
 
     // options
-    // RenderOptions options = internal::render_options_from_args(args);
-    auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
-    json j_options = json::parse(f_options);
-    RenderOptions options = j_options;
-    // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
-    // o << std::setw(2) << j << std::endl;
-    // options.delta_tracking = true;
-    // options.denoise = false;
+    RenderOptions options;
+    // if (dataset_type == "blender") {
+        auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
+        json j_options = json::parse(f_options);
+        options = j_options;
+    // } else {
+    //     options = internal::render_options_from_args(args);
+    //     options.delta_tracking = false;
+    //     options.denoise = false;
+    //     options.spp = 4;
+    //     // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
+    //     // o << std::setw(2) << j << std::endl;
+    // }
+    
 
     RenderContext ctx;
     ctx.resize(width, height);
