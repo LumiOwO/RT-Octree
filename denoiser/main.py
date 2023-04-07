@@ -4,7 +4,7 @@ import os
 
 from denoiser.utils import seed_everything
 from denoiser.runner import Runner
-from denoiser.dataset import DenoiserDataset
+from denoiser.dataset import DenoiserDataset, TanksAndTemplesDataset
 
 from denoiser.logger.base_logger import BaseLogger
 from denoiser.logger.wandb_logger import WandbLogger
@@ -25,23 +25,30 @@ def main(args):
     else:
         logger = BaseLogger(args)
 
-    # Load data
-    dataset = DenoiserDataset(args, device=device)
-    logger.print("Dataset loaded.")
-
     # Create model
     model = DenoiserNetwork(
         args.in_channels, args.mid_channels, args.num_layers, args.kernel_levels)
+    if args.task == "compact":
+        runner = Runner(args, logger=logger, device=device)
+        runner.compact(model)
+        return
     model = model.to(device)
 
+    # Load data
+    if args.dataset_type == "blender":
+        dataset = DenoiserDataset(args, device=device)
+    elif args.dataset_type == "tt":
+        dataset = TanksAndTemplesDataset(args, device=device)
+    else:
+        raise NotImplementedError(f"Invalid dataset type: {args.dataset_type}.")
+    logger.print("Dataset loaded.")
+
     # Create runner
-    runner = Runner(args, dataset, logger, device=device)
+    runner = Runner(args, dataset=dataset, logger=logger, device=device)
     if args.task == "train":
         runner.train(model)
     elif args.task == "test":
         runner.test(model)
-    elif args.task == "compact":
-        runner.compact(model)
     else:
         raise NotImplementedError(f"Invalid task type: {args.task}.")
 
@@ -60,6 +67,8 @@ if __name__ == "__main__":
                         help="input data directory")
     parser.add_argument("--spp", type=int, default=1, 
                         help="use which spp noisy input")
+    parser.add_argument("--dataset_type", type=str, default="blender", 
+                        help="options: llff / blender / tt")
 
     # logging/saving options
     parser.add_argument("--use_wandb", action="store_true",  
@@ -149,8 +158,6 @@ if __name__ == "__main__":
                         default=.5, help="fraction of img taken for central crops") 
 
     # dataset options
-    parser.add_argument("--dataset_type", type=str, default="llff", 
-                        help="options: llff / blender / deepvoxels")
     parser.add_argument("--testskip", type=int, default=8, 
                         help="will load 1/N images from test/val sets, useful for large datasets like deepvoxels")
 

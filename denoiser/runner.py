@@ -9,7 +9,7 @@ from denoiser.metrics import get_loss_fn
 from denoiser.metrics import PSNRMetric, SSIMMetric, LPIPSMetric
 
 class Runner(object):
-    def __init__(self, args, dataset, logger, device=None):
+    def __init__(self, args, dataset=None, logger=None, device=None):
         self.args = args
         self.dataset = dataset
         self.logger = logger
@@ -152,5 +152,5 @@ class Runner(object):
             return
         self.logger.print(f"Load checkpoint from {ckpt_path}")
         model.load_state_dict(ckpt['model'])
-        trt_ts_module = compact_and_compile(model)
+        trt_ts_module = compact_and_compile(model, self.device)
         torch.jit.save(trt_ts_module, "trt_torchscript_module.ts") # save the TRT embedded Torchscript

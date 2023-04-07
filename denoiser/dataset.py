@@ -152,3 +152,65 @@ class DenoiserDataset():
             batch_size=(self.args.batch_size if task == "train" else 1), 
             num_workers=0)
         return loader
+
+
+class TanksAndTemplesDataset(DenoiserDataset):
+    def __init__(self, args, device=None):
+        self.args = args
+        self.device = device
+        self.buffers_in = {}
+        self.imgs_in = {}
+        self.imgs_gt = {}
+
+        img_files = sorted(os.listdir(os.path.join(args.data_dir, "rgb")))
+
+        for s in ["train", "val", "test"]:
+            if args.task == "test" and s != "test":
+                continue
+            # FIXME: skip val set?
+            if s == "val":
+                continue
+
+            if s == 'train':
+                img_files_s = [x for x in img_files if x.startswith('0_')]
+            elif s == 'test':
+                img_files_s = [x for x in img_files if x.startswith('1_')]
+
+            buffers_in_list = []
+            imgs_in_list = []
+            imgs_gt_list = []
+            tqdm.write(f"Loading {s} set...")
+            for img_fname in tqdm(img_files_s):
+                img_gt = imageio.imread(
+                    os.path.join(args.data_dir, "rgb", img_fname))
+                rgba = imageio.imread(
+                    os.path.join(args.data_dir, f"spp_{args.spp}", "rgba_" + img_fname))
+                depth = imageio.imread(
+                    os.path.join(args.data_dir, f"spp_{args.spp}", "depth_" + img_fname))
+                img_in = imageio.imread(
+                    os.path.join(args.data_dir, f"spp_{args.spp}", img_fname))
+
+                buffers_in, img_in, img_gt = self.preprocess(rgba, depth, img_in, img_gt)
+
+                # if s == "train":
+                if False:
+                    buffers_in, img_gt = self.slice_imgs(buffers_in, img_gt)
+                else:
+                    buffers_in = [buffers_in]
+                    img_in = [img_in]
+                    img_gt = [img_gt]
+
+                buffers_in_list.extend(buffers_in)
+                imgs_in_list.extend(img_in)
+                imgs_gt_list.extend(img_gt)
+
+            tqdm.write("Moving to cuda...")
+            self.buffers_in[s] = torch.stack([
+                torch.from_numpy(x)[..., :args.in_channels].permute(2, 0, 1).contiguous() # [C, H, W]
+                for x in buffers_in_list]).to(device)
+            self.imgs_in[s] = torch.stack([
+                torch.from_numpy(x) # [H, W, 4]
+                for x in imgs_in_list]).to(device)
+            self.imgs_gt[s] = torch.stack([
+                torch.from_numpy(x) # [H, W, 4]
+                for x in imgs_gt_list]).to(device)
