@@ -146,11 +146,11 @@ class Runner(object):
         })
 
     def compact(self, model):
-        ckpt, ckpt_path = load_checkpoint(self.args.work_dir)
-        if ckpt is None:
-            self.logger.print("No checkpoint found.")
-            return
-        self.logger.print(f"Load checkpoint from {ckpt_path}")
-        model.load_state_dict(ckpt['model'])
+        # ckpt, ckpt_path = load_checkpoint(self.args.work_dir)
+        # if ckpt is None:
+        #     self.logger.print("No checkpoint found.")
+        #     return
+        # self.logger.print(f"Load checkpoint from {ckpt_path}")
+        # model.load_state_dict(ckpt['model'])
         trt_ts_module = compact_and_compile(model, self.device)
         torch.jit.save(trt_ts_module, "trt_torchscript_module.ts") # save the TRT embedded Torchscript
