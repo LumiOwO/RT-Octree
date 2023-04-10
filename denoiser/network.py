@@ -48,43 +48,41 @@ except ImportError:
                     ]])
     print("===== CUDA extension loaded.")
 
-class RepVGG(nn.Module):
+class RepVGGBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(RepVGG, self).__init__()
+        super(RepVGGBlock, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.conv5 = nn.Conv2d(in_channels, out_channels, 5, padding="same")
+        # self.conv5 = nn.Conv2d(in_channels, out_channels, 5, padding="same")
         self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
         self.conv1 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
 
     def forward(self, x):
-        x5 = self.conv5(x)
+        # x5 = self.conv5(x)
         x3 = self.conv3(x)
         x1 = self.conv1(x)
-        h = x5 + x3 + x1
+        h = x3 + x1
         if self.in_channels == self.out_channels:
             h = h + x
-        return F.relu(h, inplace=True)
+        return F.relu6(h, inplace=True)
 
-class DenoiserNetwork(nn.Module):
+class GuidanceNet(nn.Module):
     def __init__(self, in_channels, mid_channels, num_layers, kernel_levels):
-        super(DenoiserNetwork, self).__init__()
+        super(GuidanceNet, self).__init__()
         self.in_channels = in_channels
         self.mid_channels = mid_channels
         self.num_layers = num_layers
         self.kernel_levels = kernel_levels
 
         layers = []
-        layers.append(RepVGG(in_channels, mid_channels))
+        layers.append(RepVGGBlock(in_channels, mid_channels))
         for _ in range(num_layers - 2):
-            layers.append(RepVGG(mid_channels, mid_channels))
+            layers.append(RepVGGBlock(mid_channels, mid_channels))
 
-        layers.append(RepVGG(mid_channels, kernel_levels * 2))
+        layers.append(RepVGGBlock(mid_channels, kernel_levels * 2))
         self.layers = nn.ModuleList(layers)
 
-
-    @torch.jit.export
-    def map_prediction(self, buffers_in):
+    def forward(self, buffers_in):
         # buffers_in [B, C, H, W]
         # imgs_in = buffers_in[..., :4]
         # print(imgs_in.shape)
@@ -92,8 +90,10 @@ class DenoiserNetwork(nn.Module):
         # kernel prediction
         # x = buffers_in.permute(0, 3, 1, 2).contiguous() # [B, C, H, W]
         x = buffers_in
-        for layer in self.layers:
-            x = layer(x)
+        with torch.cuda.amp.autocast():
+            for layer in self.layers:
+                x = layer(x)
+        x = x.float()
 
         weight_map = x[:, :self.kernel_levels, ...].contiguous() # [B, L, H, W]
         weight_map = F.softmax(weight_map, dim=1)
@@ -101,8 +101,7 @@ class DenoiserNetwork(nn.Module):
         kernel_map = x[:, self.kernel_levels:, ...].contiguous() # [B, L, H, W]
         return weight_map, kernel_map
 
-    @torch.jit.unused
-    def forward(self, buffers_in, img_in, requires_grad=False):
+    def filtering(self, buffers_in, img_in, requires_grad=False):
         # # buffers_in [B, C, H, W]
         # # imgs_in = buffers_in[..., :4]
         # B = img_in.shape[0]
@@ -118,7 +117,7 @@ class DenoiserNetwork(nn.Module):
         # weight_map = F.softmax(weight_map, dim=1)
 
         # kernel_map = self.kernel_layer(x) # [B, L, H, W]
-        weight_map, kernel_map = self.map_prediction(buffers_in)
+        weight_map, kernel_map = self.forward(buffers_in)
 
         # kernel reconstruction and apply
         B = img_in.shape[0]
@@ -143,43 +142,39 @@ class DenoiserNetwork(nn.Module):
         # torch.cuda.synchronize()
         return img_out
 
-class RepVGGCompact(nn.Module):
-    @torch.jit.unused
+class RepVGGBlockCompact(nn.Module):
     def __init__(self, full_model):
-        super(RepVGGCompact, self).__init__()
+        super(RepVGGBlockCompact, self).__init__()
         self.in_channels = full_model.in_channels
         self.out_channels = full_model.out_channels
 
-        self.conv5 = nn.Conv2d(self.in_channels, self.out_channels, 5, padding="same")
-        weight = torch.zeros_like(self.conv5.weight)
-        bias = torch.zeros_like(self.conv5.bias)
+        self.conv = nn.Conv2d(self.in_channels, self.out_channels, 3, padding="same")
+        weight = torch.zeros_like(self.conv.weight)
+        bias = torch.zeros_like(self.conv.bias)
 
-        weight += full_model.conv5.weight
-        bias += full_model.conv5.bias
-
-        weight += F.pad(full_model.conv3.weight, (1, 1, 1, 1))
+        weight += full_model.conv3.weight
         bias += full_model.conv3.bias
 
-        weight += F.pad(full_model.conv1.weight, (2, 2, 2, 2))
+        weight += F.pad(full_model.conv1.weight, (1, 1, 1, 1))
         bias += full_model.conv1.bias
 
         if self.in_channels == self.out_channels:
-            weight_identity = torch.zeros_like(self.conv5.weight)
+            weight_identity = torch.zeros_like(self.conv.weight)
             for i in range(self.out_channels):
-                weight_identity[i, i % self.in_channels, 2, 2] = 1
+                weight_identity[i, i % self.in_channels, 1, 1] = 1
             weight += weight_identity
 
-        self.conv5.weight = nn.Parameter(weight)
-        self.conv5.bias = nn.Parameter(bias)
-        self.conv5.requires_grad_(False)
+        self.conv.weight = nn.Parameter(weight)
+        self.conv.bias = nn.Parameter(bias)
+        self.conv.requires_grad_(False)
 
     def forward(self, x):
-        h = self.conv5(x)
-        return F.relu(h, inplace=True)
+        h = self.conv(x)
+        return F.relu6(h, inplace=True)
 
-class DenoiserNetworkCompact(DenoiserNetwork):
+class GuidanceNetCompact(GuidanceNet):
     def __init__(self, full_model):
-        super(DenoiserNetwork, self).__init__()
+        super(GuidanceNet, self).__init__()
         self.in_channels = full_model.in_channels
         self.mid_channels = full_model.mid_channels
         self.num_layers = full_model.num_layers
@@ -187,61 +182,14 @@ class DenoiserNetworkCompact(DenoiserNetwork):
 
         layers = []
         for layer in full_model.layers:
-            layers.append(RepVGGCompact(layer))
+            layers.append(RepVGGBlockCompact(layer))
         self.layers = nn.ModuleList(layers)
 
-class MapPrediction(nn.Module):
-    def __init__(self, in_channels, mid_channels, num_layers, kernel_levels):
-        super(MapPrediction, self).__init__()
-        self.in_channels = in_channels
-        self.mid_channels = mid_channels
-        self.num_layers = num_layers
-        self.kernel_levels = kernel_levels
-
-        layers = []
-        layers.append(RepVGG(in_channels, mid_channels))
-        for _ in range(num_layers - 2):
-            layers.append(RepVGG(mid_channels, mid_channels))
-
-        layers.append(RepVGG(mid_channels, kernel_levels * 2))
-        self.layers = nn.ModuleList(layers)
-
-    def forward(self, buffers_in):
-        # buffers_in [B, C, H, W]
-        # imgs_in = buffers_in[..., :4]
-        # print(imgs_in.shape)
-
-        # kernel prediction
-        x = buffers_in.permute(0, 3, 1, 2).contiguous() # [B, C, H, W]
-        x = buffers_in
-        for layer in self.layers:
-            x = layer(x)
-
-        weight_map = x[:, :self.kernel_levels, ...].contiguous() # [B, L, H, W]
-        weight_map = F.softmax(weight_map, dim=1)
-
-        kernel_map = x[:, self.kernel_levels:, ...].contiguous() # [B, L, H, W]
-        return weight_map, kernel_map
-
-class MapPredictionCompact(MapPrediction):
-    def __init__(self, full_model):
-        super(MapPrediction, self).__init__()
-        self.in_channels = full_model.in_channels
-        self.mid_channels = full_model.mid_channels
-        self.num_layers = full_model.num_layers
-        self.kernel_levels = full_model.kernel_levels
-
-        layers = []
-        for layer in full_model.layers:
-            layers.append(RepVGGCompact(layer))
-        self.layers = nn.ModuleList(layers)
-
-
-def compact_and_compile(model: DenoiserNetwork, device=None):
+def compact_and_compile(model: GuidanceNet, device=None):
     # Compact
-    model = MapPrediction(
+    model = GuidanceNet(
         model.in_channels, model.mid_channels, model.num_layers, model.kernel_levels)
-    compact = MapPredictionCompact(model)
+    compact = GuidanceNetCompact(model)
     model = model.half()
     compact = compact.half()
     compact = compact.eval()
@@ -258,46 +206,47 @@ def compact_and_compile(model: DenoiserNetwork, device=None):
     #     print((out2 - out1).max())
     #     assert ((out1 - out2).abs() < 1e-4).all(), "Compact check failed."
 
-    buffers_in = buffers_in.half()
+    # buffers_in = buffers_in.half()
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
         with torch.no_grad():
-            buffers_in = buffers_in.half()
-            out1, out2 = model(buffers_in)
-            buffers_in = buffers_in.float()
+            # buffers_in = buffers_in.half()
+            out1, out2 = model.forward(buffers_in)
+            # buffers_in = buffers_in.float()
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
         with torch.no_grad():
-            buffers_in = buffers_in.half()
-            out1, out2 = compact(buffers_in)
-            buffers_in = buffers_in.float()
+            # buffers_in = buffers_in.half()
+            out1, out2 = compact.forward(buffers_in)
+            # buffers_in = buffers_in.float()
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     buffers_in = buffers_in.half()
     # compact_script = torch.jit.script(compact)
     with torch.no_grad():
-        compact_script = torch.jit.trace(compact.forward, (buffers_in))
+        guidance_net_ts = torch.jit.trace(compact.forward, (buffers_in))
     buffers_in = buffers_in.float()
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
         with torch.no_grad():
             buffers_in = buffers_in.half()
-            out1, out2 = compact_script(buffers_in)
-            buffers_in = buffers_in.float()
+            out1, out2 = guidance_net_ts(buffers_in)
+    print(out1.dtype)
+    buffers_in = buffers_in.float()
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    trt_compact_script = torch_tensorrt.compile(
-        compact_script, 
+    trt_guidance_net_ts = torch_tensorrt.compile(
+        guidance_net_ts, 
         inputs=[torch_tensorrt.Input(buffers_in.shape, dtype=torch.float16)],
         enabled_precisions={torch.float16},
     )
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
         with torch.no_grad():
             buffers_in = buffers_in.half()
-            out1_trt, out2_trt = trt_compact_script(buffers_in)
+            out1_trt, out2_trt = trt_guidance_net_ts(buffers_in)
             buffers_in = buffers_in.float()
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     print((out1_trt - out1).max())
     print((out2_trt - out2).max())
 
-    return trt_compact_script
+    return trt_guidance_net_ts

@@ -41,6 +41,7 @@ class Runner(object):
         dataloader = self.dataset.dataloader("train")
         optimizer = self.optimizer_fn(model)
         lr_scheduler = self.scheduler_fn(optimizer)
+        scaler = torch.cuda.amp.GradScaler()
         start = 1
 
         # load checkpoint
@@ -57,7 +58,7 @@ class Runner(object):
         # train
         for epoch in trange(start, self.args.epochs + 1):
             self.epoch = epoch
-            self.train_one_epoch(model, dataloader, optimizer, lr_scheduler)
+            self.train_one_epoch(model, dataloader, optimizer, lr_scheduler, scaler)
             gc.collect()
             torch.cuda.empty_cache()
 
@@ -70,15 +71,17 @@ class Runner(object):
         self.logger.print("Test after training")
         self.test(model, False)
 
-    def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler):
+    def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler, scaler):
         avg_loss = 0
         for batch_idx, (buffers_in, img_in, img_gt) in enumerate(dataloader):
             optimizer.zero_grad(set_to_none=True)
 
-            img_out = model.forward(buffers_in, img_in, requires_grad=True)
+            img_out = model.filtering(buffers_in, img_in, requires_grad=True)
 
             loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
-            loss.backward()
+            # loss.backward()
+            scaler.scale(loss).backward()
+
             optimizer.step()
             avg_loss += loss.item()
 
@@ -128,7 +131,7 @@ class Runner(object):
         avg_loss = 0
         for batch_idx, (buffers_in, img_in, img_gt) in enumerate(tqdm(dataloader)):
             # B == 1 in test
-            img_out = model.forward(buffers_in, img_in)
+            img_out = model.filtering(buffers_in, img_in)
 
             loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
             avg_loss += loss.item()
@@ -153,4 +156,5 @@ class Runner(object):
         # self.logger.print(f"Load checkpoint from {ckpt_path}")
         # model.load_state_dict(ckpt['model'])
         trt_ts_module = compact_and_compile(model, self.device)
-        torch.jit.save(trt_ts_module, "trt_torchscript_module.ts") # save the TRT embedded Torchscript
+        torch.jit.save(trt_ts_module, 
+            os.path.join(self.args.work_dir, "trt_latest.ts"))

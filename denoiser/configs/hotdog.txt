@@ -12,7 +12,7 @@ i_save = 100
 i_test = 100
 
 in_channels = 4
-mid_channels = 14
+mid_channels = 32
 num_layers = 3
 kernel_levels = 6
 loss_fn = smape

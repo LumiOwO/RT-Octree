@@ -9,7 +9,7 @@ from denoiser.dataset import DenoiserDataset, TanksAndTemplesDataset
 from denoiser.logger.base_logger import BaseLogger
 from denoiser.logger.wandb_logger import WandbLogger
 
-from denoiser.network import DenoiserNetwork
+from denoiser.network import GuidanceNet
 
 import configargparse
 
@@ -26,7 +26,7 @@ def main(args):
         logger = BaseLogger(args)
 
     # Create model
-    model = DenoiserNetwork(
+    model = GuidanceNet(
         args.in_channels, args.mid_channels, args.num_layers, args.kernel_levels)
     if args.task == "compact":
         runner = Runner(args, logger=logger, device=device)
