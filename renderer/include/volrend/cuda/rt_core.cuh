@@ -369,14 +369,18 @@ __device__ __inline__ void delta_trace_ray(
 
         scalar_t t = tmin;
         scalar_t cube_sz;
-        float src = 0;
 
+        float src = 0;
         float dst[SPP + 1];
         sample_dst<SPP>(dst, rng);
-        int idx = 0;
+
+        const half* tree_vals[SPP];
+        float       cnts[SPP] = {};
+        uint32_t    spp       = 0;
+        uint32_t    sh_nums   = 0;
 
         //int step = 0;
-        while (t < tmax && idx < SPP) {
+        while (t < tmax) {
             //step++;
             pos[0] = cen[0] + t * dir[0];
             pos[1] = cen[1] + t * dir[1];
@@ -386,79 +390,128 @@ __device__ __inline__ void delta_trace_ray(
 
             const scalar_t t_subcube = _dda_unit(pos, invdir) /  cube_sz;
             const scalar_t delta_t = t_subcube + opt.step_size;
-            if (__half2float(tree_val[tree.data_dim - 1]) > opt.sigma_thresh) {
-                float sigma = __half2float(tree_val[tree.data_dim - 1]);
+            const float sigma = __half2float(tree_val[tree.data_dim - 1]);
+            if (sigma > opt.sigma_thresh) {
                 const float delta = delta_t * delta_scale * sigma;
-                if (src + delta >= dst[idx]) {
-                    float cnt = 0;
+                if (src + delta >= dst[spp]) {
+                    float& cnt         = cnts[sh_nums];
+                    tree_vals[sh_nums] = tree_val;
+                    ++sh_nums;
                     do {
                         ++cnt;
-                        ++idx;
-                    } while (src + delta >= dst[idx]);
+                        ++spp;
+                    } while (src + delta >= dst[spp]);
 
                     depth = t;
-                    if (opt.render_depth) {
-                        out[0] += t * cnt;
-                        // out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
-                        out[3] += cnt;
-                        goto end_cell;
-                    } else {
-                        if (tree.data_format.basis_dim >= 0) {
-                            int off = 0;
-#define MUL_BASIS_I(t) basis_fn[t] * __half2float(tree_val[off + t])
-#pragma unroll 3
-                            for (int t = 0; t < 3; ++ t) {
-                                tmp = basis_fn[0] * __half2float(tree_val[off]);
-                                switch(tree.data_format.basis_dim) {
-                                    case 25:
-                                        tmp += MUL_BASIS_I(16) +
-                                            MUL_BASIS_I(17) +
-                                            MUL_BASIS_I(18) +
-                                            MUL_BASIS_I(19) +
-                                            MUL_BASIS_I(20) +
-                                            MUL_BASIS_I(21) +
-                                            MUL_BASIS_I(22) +
-                                            MUL_BASIS_I(23) +
-                                            MUL_BASIS_I(24);
-                                    case 16:
-                                        tmp += MUL_BASIS_I(9) +
-                                            MUL_BASIS_I(10) +
-                                            MUL_BASIS_I(11) +
-                                            MUL_BASIS_I(12) +
-                                            MUL_BASIS_I(13) +
-                                            MUL_BASIS_I(14) +
-                                            MUL_BASIS_I(15);
+//                     if (opt.render_depth) {
+//                         out[0] += t * cnt;
+//                         // out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);
+//                     } else {
+//                         if (tree.data_format.basis_dim >= 0) {
+//                             int off = 0;
+// #define MUL_BASIS_I(t) basis_fn[t] * __half2float(tree_val[off + t])
+// #pragma unroll 3
+//                             for (int t = 0; t < 3; ++ t) {
+//                                 tmp = basis_fn[0] * __half2float(tree_val[off]);
+//                                 switch(tree.data_format.basis_dim) {
+//                                     case 25:
+//                                         tmp += MUL_BASIS_I(16) +
+//                                             MUL_BASIS_I(17) +
+//                                             MUL_BASIS_I(18) +
+//                                             MUL_BASIS_I(19) +
+//                                             MUL_BASIS_I(20) +
+//                                             MUL_BASIS_I(21) +
+//                                             MUL_BASIS_I(22) +
+//                                             MUL_BASIS_I(23) +
+//                                             MUL_BASIS_I(24);
+//                                     case 16:
+//                                         tmp += MUL_BASIS_I(9) +
+//                                             MUL_BASIS_I(10) +
+//                                             MUL_BASIS_I(11) +
+//                                             MUL_BASIS_I(12) +
+//                                             MUL_BASIS_I(13) +
+//                                             MUL_BASIS_I(14) +
+//                                             MUL_BASIS_I(15);
 
-                                    case 9:
-                                        tmp += MUL_BASIS_I(4) +
-                                            MUL_BASIS_I(5) +
-                                            MUL_BASIS_I(6) +
-                                            MUL_BASIS_I(7) +
-                                            MUL_BASIS_I(8);
+//                                     case 9:
+//                                         tmp += MUL_BASIS_I(4) +
+//                                             MUL_BASIS_I(5) +
+//                                             MUL_BASIS_I(6) +
+//                                             MUL_BASIS_I(7) +
+//                                             MUL_BASIS_I(8);
 
-                                    case 4:
-                                        tmp += MUL_BASIS_I(1) +
-                                            MUL_BASIS_I(2) +
-                                            MUL_BASIS_I(3);
-                                }
-                                out[t] += cnt / (1.f + __expf(-tmp));
-                                off += tree.data_format.basis_dim;
-                            }
-#undef MUL_BASIS_I
-                        } else {
-                            for (int j = 0; j < 3; ++j) {
-                                out[j] += __half2float(tree_val[j]) * cnt;
-                            }
-                        }
+//                                     case 4:
+//                                         tmp += MUL_BASIS_I(1) +
+//                                             MUL_BASIS_I(2) +
+//                                             MUL_BASIS_I(3);
+//                                 }
+//                                 out[t] += cnt / (1.f + __expf(-tmp));
+//                                 off += tree.data_format.basis_dim;
+//                             }
+// #undef MUL_BASIS_I
+//                         } else {
+//                             for (int j = 0; j < 3; ++j) {
+//                                 out[j] += __half2float(tree_val[j]) * cnt;
+//                             }
+//                         }
+//                     }
+
+//                     out[3] += cnt;
+                    if (spp == SPP) {
+                        // if (dst[SPP - 1] > 6)
+                        //     printf("%f, %f\n", src + delta, dst[SPP - 1]);
+                        break;
                     }
-
-                    out[3] += cnt;
-                    goto end_cell;
                 }
-            end_cell:
                 src += delta;
             }
             t += delta_t;
+        }
+
+        // if (src > 0) {
+        //     printf("%f, %f\n", src, dst[SPP - 1]);
+        // }
+        for (uint32_t i = 0; i < sh_nums; i++) {
+            if (tree.data_format.basis_dim >= 0) {
+                int off = 0;
+                const half* tree_val = tree_vals[i];
+#define MUL_BASIS_I(t) basis_fn[t] * __half2float(tree_val[off + t])
+#pragma unroll 3
+                for (int t = 0; t < 3; ++t) {
+                    tmp = basis_fn[0] * __half2float(tree_val[off]);
+                    switch (tree.data_format.basis_dim) {
+                        case 25:
+                            tmp += MUL_BASIS_I(16) + MUL_BASIS_I(17) +
+                                   MUL_BASIS_I(18) + MUL_BASIS_I(19) +
+                                   MUL_BASIS_I(20) + MUL_BASIS_I(21) +
+                                   MUL_BASIS_I(22) + MUL_BASIS_I(23) +
+                                   MUL_BASIS_I(24);
+                        case 16:
+                            tmp += MUL_BASIS_I(9) + MUL_BASIS_I(10) +
+                                   MUL_BASIS_I(11) + MUL_BASIS_I(12) +
+                                   MUL_BASIS_I(13) + MUL_BASIS_I(14) +
+                                   MUL_BASIS_I(15);
+
+                        case 9:
+                            tmp += MUL_BASIS_I(4) + MUL_BASIS_I(5) +
+                                   MUL_BASIS_I(6) + MUL_BASIS_I(7) +
+                                   MUL_BASIS_I(8);
+
+                        case 4:
+                            tmp += MUL_BASIS_I(1) + MUL_BASIS_I(2) +
+                                   MUL_BASIS_I(3);
+                    }
+                    out[t] += cnts[i] / (1.f + __expf(-tmp));
+                    off += tree.data_format.basis_dim;
+                }
+#undef MUL_BASIS_I
+            } else {
+                for (int j = 0; j < 3; ++j) {
+                    out[j] += __half2float(tree_val[j]) * cnts[i];
+                }
+            }
+
+            out[3] += cnts[i];
         }
     }
 }

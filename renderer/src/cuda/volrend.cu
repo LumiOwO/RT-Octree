@@ -675,41 +675,41 @@ __host__ void launch_renderer(const N3Tree& tree,
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
 
     // camera compare
-    if (options.delta_tracking) {
-        bool same_pose = true;
-        if (!ctx.cam_inited) {
-            ctx.recordCamera(cam);
-            ctx.cam_inited = true;
-        } else {
-            // check camera pose
-            auto&& a = ctx.prev_transform_host;
-            auto&& b = (float*)&cam.transform;
-#pragma unroll 12
-            for (int i = 0; i < 12; i++) {
-                if (fabsf(a[i] - b[i]) > 1e-5) {
-                    same_pose = false;
-                    break;
-                }
-            }
-        }
+//     if (options.delta_tracking) {
+//         bool same_pose = true;
+//         if (!ctx.cam_inited) {
+//             ctx.recordCamera(cam);
+//             ctx.cam_inited = true;
+//         } else {
+//             // check camera pose
+//             auto&& a = ctx.prev_transform_host;
+//             auto&& b = (float*)&cam.transform;
+// #pragma unroll 12
+//             for (int i = 0; i < 12; i++) {
+//                 if (fabsf(a[i] - b[i]) > 1e-5) {
+//                     same_pose = false;
+//                     break;
+//                 }
+//             }
+//         }
         
-        // update frame buffer
-        constexpr static int MAX_SPP = 1e6;
-        if (same_pose) {
-            if (ctx.spp < MAX_SPP) ctx.spp++;
-        } else {
-            // copy current frame to previous buffer
-            device::update_prev_frame<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                ctx,
-                options,
-                cam
-            );
-            // record camera
-            ctx.recordCamera(cam);
-            if (!ctx.has_history) ctx.has_history = true;
-            ctx.spp = 1;
-        }
-    }
+//         // update frame buffer
+//         constexpr static int MAX_SPP = 1e6;
+//         if (same_pose) {
+//             if (ctx.spp < MAX_SPP) ctx.spp++;
+//         } else {
+//             // copy current frame to previous buffer
+//             device::update_prev_frame<<<blocks, N_CUDA_THREADS, 0, stream>>>(
+//                 ctx,
+//                 options,
+//                 cam
+//             );
+//             // record camera
+//             ctx.recordCamera(cam);
+//             if (!ctx.has_history) ctx.has_history = true;
+//             ctx.spp = 1;
+//         }
+//     }
 
     // render
     if (options.delta_tracking) {

@@ -6,7 +6,7 @@
   ],
   "delta_tracking": true,
   "denoise": false,
-  "spp": 1,
+  "spp": 4,
   "enable_probe": false,
   "grid_max_depth": 4,
   "probe": [
@@ -30,7 +30,7 @@
     0.0
   ],
   "show_grid": false,
-  "sigma_thresh": 0.009999999776482582,
+  "sigma_thresh": 0.01,
   "step_size": 9.999999747378752e-05,
   "stop_thresh": 0.009999999776482582
 }
