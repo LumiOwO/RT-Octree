@@ -1,7 +1,7 @@
 logs_root = ./logs
 exp_name = lego
 data_dir = ./data/nerf_synthetic/lego
-spp = 4
+spp = 1
 use_wandb = true
 
 lr = 0.00005
@@ -13,6 +13,6 @@ i_test = 100
 
 in_channels = 8
 mid_channels = 32
-num_layers = 6
+num_layers = 3
 kernel_levels = 6
 loss_fn = smape

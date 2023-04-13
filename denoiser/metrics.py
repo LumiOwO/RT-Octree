@@ -1,4 +1,6 @@
 import torch
+import torch.nn.functional as F
+
 from pytorch_msssim import ssim
 import lpips
 
@@ -86,3 +88,12 @@ class LPIPSMetric(Metric):
 
     def fn(self, preds, truths):
         return self.loss_fn(preds, truths).item()
+
+
+def stdfilt(img, kernel_size):
+    mean = F.avg_pool2d(
+        img, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+    mean_of_square = F.avg_pool2d(
+        img ** 2, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+    std = (mean_of_square - mean ** 2) ** 0.5
+    return std

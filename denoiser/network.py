@@ -56,16 +56,28 @@ class RepVGGBlock(nn.Module):
         # self.conv5 = nn.Conv2d(in_channels, out_channels, 5, padding="same")
         self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
         self.conv3_2 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
+        self.conv3_3 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
+
         self.conv1 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
+        self.conv1_2 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
+        self.conv1_3 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
 
     def forward(self, x):
         # x5 = self.conv5(x)
-        x3 = self.conv3(x)
-        x3_2 = self.conv3_2(x)
-        x1 = self.conv1(x)
-        h = x3 + x1 + x3_2
+        # x3 = self.conv3(x)
+        # x3_2 = self.conv3_2(x)
+        # x1 = self.conv1(x)
+        # h = x3 + x1 + x3_2
+        h = self.conv3(x)
+        h += self.conv3_2(x)
+        h += self.conv3_3(x)
+
+        h += self.conv1(x)
+        h += self.conv1_2(x)
+        h += self.conv1_3(x)
+
         if self.in_channels == self.out_channels:
-            h = h + x
+            h += x
         return F.relu6(h, inplace=True)
 
 class GuidanceNet(nn.Module):
