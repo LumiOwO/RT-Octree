@@ -125,7 +125,10 @@ class DenoiserDataset():
             img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
 
         depth = np.expand_dims(depth, axis=2)
-        buffers_in = np.concatenate((rgba, depth), axis=2)
+        # buffers_in = np.concatenate((rgba, depth), axis=2)
+        luminance = np.dot(rgba[..., :3], np.array([0.2126, 0.7152, 0.0722], dtype=np.float32))
+        luminance = np.expand_dims(luminance, axis=-1)
+        buffers_in = np.concatenate((rgba, rgba * rgba, luminance, luminance * luminance), axis=2)
 
         if False:
             temp1 = torch.stack([torch.from_numpy(x) for x in [buffers_in[..., :4]]])

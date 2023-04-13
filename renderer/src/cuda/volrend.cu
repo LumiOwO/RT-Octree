@@ -144,7 +144,7 @@ __global__ static void render_kernel(
         TreeSpec tree,
         RenderOptions opt,
         float* probe_coeffs,
-        RenderContext ctx, // use value, not reference
+        RenderContext ctx,
         bool offscreen) {
     CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
     
@@ -189,7 +189,6 @@ __global__ static void render_kernel(
         }
     }
     float t_max = 1e9f;
-    float depth = 0;
     if (enable_draw) {
         screen2worlddir(x, y, cam, dir, cen);
         // out[3]=1.f;
@@ -205,21 +204,7 @@ __global__ static void render_kernel(
 
         rodrigues(opt.rot_dirs, vdir);
 
-        if (opt.delta_tracking) {
-            constexpr int spp = 1;
-            constexpr float inv_spp = 1.0f / spp;
-            ctx.rng.advance(idx * spp);  // init random number generator
-            // const float dst = -__logf(1.0f - ctx.rng.next_float());
-            delta_trace_ray<float, 1>(
-                tree, dir, vdir, cen, opt, t_max, out, ctx.rng, depth);
-
-            out[0] *= inv_spp;
-            out[1] *= inv_spp;
-            out[2] *= inv_spp;
-            out[3] *= inv_spp;
-        } else {
-            trace_ray(tree, dir, vdir, cen, opt, t_max, out);
-        }
+        trace_ray(tree, dir, vdir, cen, opt, t_max, out);
     }
 
     float rgbx_init[4];
@@ -234,13 +219,6 @@ __global__ static void render_kernel(
     }
 
     // Compositing with existing color
-    // float alpha;
-    // if (opt.delta_tracking) {
-    //     alpha = (out[3] > 0);
-    // } else {
-    //     alpha = out[3];
-    // }
-    // const float nalpha = 1.f - alpha;
     const float nalpha = 1.f - out[3];
     if (offscreen) {
         const float remain = opt.background_brightness * nalpha;
@@ -267,29 +245,6 @@ __global__ static void render_kernel(
         y,
         cudaBoundaryModeZero); // squelches out-of-bound writes
     
-    if (opt.delta_tracking) {
-        // write float colors into delta tracking context
-        // float&& alpha = 1.0f / ctx.spp;
-        // float&& n_alpha = 1.0f - alpha;
-        // float* dst = &ctx.data[CUR_RGBA][idx << 2];
-        // dst[0] = out[0] * alpha + dst[0] * n_alpha;
-        // dst[1] = out[1] * alpha + dst[1] * n_alpha;
-        // dst[2] = out[2] * alpha + dst[2] * n_alpha;
-        // dst[3] = out[3] * alpha + dst[3] * n_alpha;
-
-        // float& dst_d = ctx.data[CUR_D][idx];
-        // dst_d = depth * alpha + dst_d * n_alpha;
-
-        float4& rgba_noisy = ctx.rgba_noisy[idx];
-        rgba_noisy.x = out[0];
-        rgba_noisy.y = out[1];
-        rgba_noisy.z = out[2];
-        rgba_noisy.w = out[3];
-        // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
-        // rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
-
-        ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
-    }
 }
 
 template <int SPP>
@@ -344,8 +299,8 @@ __global__ static void render_kernel_delta_trace(
             out[0] = out[1] = out[2] = 0.f;
         }
     }
+
     float t_max = 1e9f;
-    float depth = 0;
     if (enable_draw) {
         screen2worlddir(x, y, cam, dir, cen);
         // out[3]=1.f;
@@ -366,16 +321,9 @@ __global__ static void render_kernel_delta_trace(
 
         rodrigues(opt.rot_dirs, vdir);
 
-        constexpr float INV_SPP = 1.0f / SPP;
         ctx.rng.advance(idx * SPP);  // init random number generator
-        // const float dst = -__logf(1.0f - ctx.rng.next_float());
         delta_trace_ray<float, SPP>(
-            tree, dir, vdir, cen, opt, t_max, out, ctx.rng, depth);
-
-        out[0] *= INV_SPP;
-        out[1] *= INV_SPP;
-        out[2] *= INV_SPP;
-        out[3] *= INV_SPP;
+            tree, dir, vdir, cen, opt, t_max, out, ctx.rng);
     }
 
     float rgbx_init[4];
@@ -431,7 +379,7 @@ __global__ static void render_kernel_delta_trace(
     // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
     // rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
 
-    ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
+    // ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
 }
 
 __global__ static void retrieve_cursor_lumisphere_kernel(
@@ -671,45 +619,8 @@ __host__ void launch_renderer(const N3Tree& tree,
 
     // less threads is weirdly faster for me than 1024
     // Not sure if this scales to a good GPU
-    const int N_CUDA_THREADS = 512;
+    constexpr int N_CUDA_THREADS = 512;
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
-
-    // camera compare
-//     if (options.delta_tracking) {
-//         bool same_pose = true;
-//         if (!ctx.cam_inited) {
-//             ctx.recordCamera(cam);
-//             ctx.cam_inited = true;
-//         } else {
-//             // check camera pose
-//             auto&& a = ctx.prev_transform_host;
-//             auto&& b = (float*)&cam.transform;
-// #pragma unroll 12
-//             for (int i = 0; i < 12; i++) {
-//                 if (fabsf(a[i] - b[i]) > 1e-5) {
-//                     same_pose = false;
-//                     break;
-//                 }
-//             }
-//         }
-        
-//         // update frame buffer
-//         constexpr static int MAX_SPP = 1e6;
-//         if (same_pose) {
-//             if (ctx.spp < MAX_SPP) ctx.spp++;
-//         } else {
-//             // copy current frame to previous buffer
-//             device::update_prev_frame<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-//                 ctx,
-//                 options,
-//                 cam
-//             );
-//             // record camera
-//             ctx.recordCamera(cam);
-//             if (!ctx.has_history) ctx.has_history = true;
-//             ctx.spp = 1;
-//         }
-//     }
 
     // render
     if (options.delta_tracking) {
@@ -791,15 +702,6 @@ __host__ void launch_renderer(const N3Tree& tree,
                     "spp == " + std::to_string(options.spp) +
                     " not supported.");
         }
-        // // temporal denoise
-        // device::temporal_accumulate<<<blocks, N_CUDA_THREADS, 0, stream>>>(
-        //     surf_obj,
-        //     surf_obj_depth,
-        //     cam,
-        //     ctx,
-        //     options,
-        //     image_arr
-        // );
 
         // auto temp = torch.cat(
         //     {
@@ -813,7 +715,7 @@ __host__ void launch_renderer(const N3Tree& tree,
         // update rng
         ctx.rng.advance();
     } else {
-
+        // original plenoctree
         device::render_kernel<<<blocks, N_CUDA_THREADS, 0, stream>>>(
             surf_obj,
             surf_obj_depth,

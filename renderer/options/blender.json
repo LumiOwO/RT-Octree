@@ -6,7 +6,7 @@
   ],
   "delta_tracking": true,
   "denoise": false,
-  "spp": 4,
+  "spp": 8,
   "enable_probe": false,
   "grid_max_depth": 4,
   "probe": [

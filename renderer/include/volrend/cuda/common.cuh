@@ -5,8 +5,12 @@
 
 #include <cuda_runtime.h>
 
-#define CUDA_GET_THREAD_ID(tid, Q) const int tid = blockIdx.x * blockDim.x + threadIdx.x; \
-                      if (tid >= Q) return
+// Maps to a single instruction on G8x / G9x / G10x
+#define IMAD(a, b, c) (__mul24((a), (b)) + (c))
+
+#define CUDA_GET_THREAD_ID(tid, Q)                             \
+    const int tid = IMAD(blockIdx.x, blockDim.x, threadIdx.x); \
+    if (tid >= Q) return
 #define N_BLOCKS_NEEDED(Q, N_CUDA_THREADS) ((Q - 1) / N_CUDA_THREADS + 1)
 
 template<typename scalar_t>
