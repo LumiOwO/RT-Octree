@@ -72,14 +72,14 @@ struct RenderOptions {
         sigma_thresh,
         stop_thresh,
         background_brightness,
-        render_bbox,
-        basis_minmax,
-        rot_dirs,
+        //render_bbox,
+        //basis_minmax,
+        //rot_dirs,
         show_grid,
         grid_max_depth,
-#ifdef VOLREND_CUDA
-        render_depth,
-#endif
+//#ifdef VOLREND_CUDA
+//        render_depth,
+//#endif
         enable_probe,
         probe,
         probe_disp_size,

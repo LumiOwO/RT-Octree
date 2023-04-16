@@ -9,16 +9,19 @@ import torchvision
 from torch.utils.data import Dataset, DataLoader
 
 class DenoiserDatasetSplit(Dataset):
-    def __init__(self, buffers_in, imgs_in, imgs_gt):
+    def __init__(self, buffers_in, imgs_in, imgs_gt, device):
         self.buffers_in = buffers_in
         self.imgs_in = imgs_in
         self.imgs_gt = imgs_gt
+        self.device = device
 
     def __len__(self):
         return len(self.buffers_in)
 
     def __getitem__(self, idx):
-        return self.buffers_in[idx], self.imgs_in[idx], self.imgs_gt[idx]
+        return self.buffers_in[idx].to(self.device), \
+            self.imgs_in[idx].to(self.device), \
+            self.imgs_gt[idx].to(self.device)
 
 class DenoiserDataset():
     def __init__(self, args, device=None):
@@ -149,7 +152,7 @@ class DenoiserDataset():
 
     def dataloader(self, task):
         dataset = DenoiserDatasetSplit(
-            self.buffers_in[task], self.imgs_in[task], self.imgs_gt[task])
+            self.buffers_in[task], self.imgs_in[task], self.imgs_gt[task], self.device)
         loader = DataLoader(dataset,
             shuffle=(task == "train"),
             batch_size=(self.args.batch_size if task == "train" else 1), 
@@ -210,10 +213,10 @@ class TanksAndTemplesDataset(DenoiserDataset):
             tqdm.write("Moving to cuda...")
             self.buffers_in[s] = torch.stack([
                 torch.from_numpy(x)[..., :args.in_channels].permute(2, 0, 1).contiguous() # [C, H, W]
-                for x in buffers_in_list]).to(device)
+                for x in buffers_in_list])
             self.imgs_in[s] = torch.stack([
                 torch.from_numpy(x) # [H, W, 4]
-                for x in imgs_in_list]).to(device)
+                for x in imgs_in_list])
             self.imgs_gt[s] = torch.stack([
                 torch.from_numpy(x) # [H, W, 4]
-                for x in imgs_gt_list]).to(device)
+                for x in imgs_gt_list])

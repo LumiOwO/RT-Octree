@@ -1,7 +1,7 @@
 logs_root = ./logs
-exp_name = drums
-data_dir = ./data/nerf_synthetic/drums
-dataset_type = blender
+exp_name = Barn
+data_dir = ./data/plenoctree/Barn
+dataset_type = tt
 spp = 4
 use_wandb = true
 

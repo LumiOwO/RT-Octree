@@ -309,16 +309,18 @@ int main(int argc, char *argv[])
     // options
     RenderOptions options;
     // if (dataset_type == "blender") {
-        auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
+        //auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
+        auto f_options = std::ifstream("D:/111/projects/volrend/data/lego/blender.json");
         json j_options = json::parse(f_options);
         options = j_options;
     // } else {
-    //     options = internal::render_options_from_args(args);
-    //     options.delta_tracking = false;
-    //     options.denoise = false;
-    //     options.spp = 4;
-    //     // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
-    //     // o << std::setw(2) << j << std::endl;
+         //options = internal::render_options_from_args(args);
+         //options.delta_tracking = true;
+         //options.denoise = false;
+         //options.spp = 4;
+         // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
+         // json j = options;
+         // o << std::setw(2) << j << std::endl;
     // }
     
 
