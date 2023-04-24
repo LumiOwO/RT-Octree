@@ -4,108 +4,78 @@
 #include <memory>
 
 #include "pcg32.h"
-#include "volrend/camera.hpp"
 #include "volrend/cuda/common.cuh"
 
 namespace volrend {
 
-// Enum for RenderContext
-enum {
-    // Previous frame
-    PREV_RGBA = 0,
-    CUR_RGBA,
-    PREV_D,
-    CUR_D,
-
-    CTX_ALL_COUNT,
-};
-
-// Rendering context for delta tracking 
 struct RenderContext {
-    bool has_history = false;
-    int spp = 0; // samples for current pose
-    
     // rng
-    pcg32 rng = pcg32(20230226);
+    pcg32 rng = pcg32(20230418);
 
-    // image buffers, device array
-    float* data[CTX_ALL_COUNT] = {};
+    // pointer to extern cuda array
+    cudaArray_t image_arr = nullptr;
+    cudaArray_t depth_arr = nullptr;
 
-    // prev camera
-    float* VOLREND_RESTRICT prev_transform_device = nullptr;
-    float* prev_transform_host = nullptr;
-    bool cam_inited = false;
+    // surface object
+    cudaSurfaceObject_t surf_obj       = 0;
+    cudaSurfaceObject_t surf_obj_depth = 0;
 
-    // torch
-    // torch::TensorOptions tensor_options =
-    //     torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
-    float4* rgba_noisy  = nullptr;
-    float*  depth_noisy = nullptr;
-    // std::shared_ptr<BuffersIn> buffers_in;
+    // auxiliary buffer
+    constexpr static const int CHANNELS   = 8;
+    float*                     aux_buffer = nullptr;
+
+    bool offscreen = false;
 
 public:
-    RenderContext() = default;
+    RenderContext()          = default;
     virtual ~RenderContext() = default;
 
-    void clearHistory() {
-        has_history = false;
-        spp = 0;
-        cam_inited = false;
-    }
-
-    void recordCamera(const Camera& cam) {
-        size_t&& size = sizeof(float) * 12;
-        // copy device array
-        cuda(Memcpy(prev_transform_device, cam.device.transform,
-            size, cudaMemcpyDeviceToDevice
-        ));
-        // copy host array
-        cuda(Memcpy(prev_transform_host, &cam.transform,
-            size, cudaMemcpyHostToHost
-        ));
-    }
-
     void freeResource() {
-        clearHistory();
-        // free device
-        if (prev_transform_device != nullptr) {
-            cuda(Free((void*)prev_transform_device));
-            prev_transform_device = nullptr;
+        if (aux_buffer) {
+            cudaFree(aux_buffer);
+            aux_buffer = nullptr;
         }
-        for (auto& arr : data) {
-            cuda(Free(arr));
+
+        if (surf_obj) {
+            cudaDestroySurfaceObject(surf_obj);
         }
-        // free host
-        delete prev_transform_host;
-        prev_transform_host = nullptr;
-        // free tensors
-        // rgba_noisy  = torch::Tensor();
-        // depth_noisy = torch::Tensor();
-        // buffers_in = nullptr;
+        if (surf_obj_depth) {
+            cudaDestroySurfaceObject(surf_obj_depth);
+        }
+        image_arr = depth_arr = nullptr;
     }
 
-    void resize(int width, int height) {
+    void update(
+        cudaArray_t image_arr,
+        cudaArray_t depth_arr,
+        const int   width,
+        const int   height) {
+
         freeResource();
 
-        // host buffer
-        prev_transform_host = new float[12];
-        // previous camera
-        cuda(Malloc((void**)&prev_transform_device, 12 * sizeof(float)));
-        // frames
-        size_t&& d_size    = sizeof(float) * width * height;
-        size_t&& rgba_size = d_size * 4;
-        cuda(Malloc(&data[PREV_RGBA], rgba_size));
-        cuda(Malloc(&data[CUR_RGBA], rgba_size));
-        cuda(Malloc(&data[PREV_D], d_size));
-        cuda(Malloc(&data[CUR_D], d_size));
+        this->image_arr = image_arr;
+        this->depth_arr = depth_arr;
+        createSurface();
 
-        // tensor
-        // rgba_noisy  = torch::zeros({height, width, 4}, tensor_options);
-        // depth_noisy = torch::zeros({height, width, 1}, tensor_options);
-        // buffers_in = std::make_shared<BuffersIn>();
-        // buffers_in->rgba  = torch::zeros({height, width, 4}, buffers_in->options);
-        // buffers_in->depth = torch::zeros({height, width, 1}, buffers_in->options);
+        cudaMalloc(&aux_buffer, sizeof(float) * CHANNELS * width * height);
+    }
+
+private:
+    void createSurface() {
+        struct cudaResourceDesc res_desc;
+        memset(&res_desc, 0, sizeof(res_desc));
+        res_desc.resType         = cudaResourceTypeArray;
+        res_desc.res.array.array = image_arr;
+        cudaCreateSurfaceObject(&surf_obj, &res_desc);
+
+        if (!offscreen) {
+            struct cudaResourceDesc res_desc;
+            memset(&res_desc, 0, sizeof(res_desc));
+            res_desc.resType         = cudaResourceTypeArray;
+            res_desc.res.array.array = depth_arr;
+            cudaCreateSurfaceObject(&surf_obj_depth, &res_desc);
+        }
     }
 };
 
-} // namespace volrend
+}  // namespace volrend

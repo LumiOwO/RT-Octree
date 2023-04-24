@@ -153,38 +153,11 @@ int main(int argc, char *argv[])
     float fy = args["fy"].as<float>();
     if (fy < 0)
         fy = fx;
-    // {
-    //     // Load intrin matrix
-    //     std::string intrin_path = args["intrin"].as<std::string>();
-    //     if (intrin_path.size())
-    //     {
-    //         read_intrins(intrin_path, fx, fy);
-    //     }
-    // }
 
+    assert(args.unmatched().size() == 1);
     // Load all transform matrices and intrin
     std::vector<glm::mat4x3> trans;
     std::vector<std::string> basenames;
-    // for (auto path : args.unmatched())
-    // {
-    //     int cnt = read_transform_matrices(path, trans);
-    //     std::string fname = remove_ext(path_basename(path));
-    //     if (cnt == 1)
-    //     {
-    //         basenames.push_back(fname);
-    //     }
-    //     else
-    //     {
-    //         for (int i = 0; i < cnt; ++i)
-    //         {
-    //             std::string tmp = std::to_string(i);
-    //             while (tmp.size() < 6)
-    //                 tmp = "0" + tmp;
-    //             basenames.push_back(fname + "_" + tmp);
-    //         }
-    //     }
-    // }
-    assert(args.unmatched().size() == 1);
     std::string dataset_type = args["dataset"].as<std::string>();
     if (dataset_type == "blender") {
         json  poses          = json::parse(std::ifstream(args.unmatched()[0]));
@@ -234,6 +207,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    // Transform convention
     if (dataset_type == "tt" || args["reverse_yz"].as<bool>()) {
         puts("INFO: Use OpenCV camera convention\n");
         // clang-format off
@@ -255,10 +229,9 @@ int main(int argc, char *argv[])
         fputs("WARNING: No camera poses specified, quitting\n", stderr);
         return 1;
     }
-    std::string out_dir = args["write_images"].as<std::string>();
 
+    // Load tree
     N3Tree tree(args["file"].as<std::string>());
-
     {
         float scale = args["scale"].as<float>();
         if (scale != 1.f)
@@ -280,24 +253,22 @@ int main(int argc, char *argv[])
         }
     }
 
+    // Create camera
     Camera camera(width, height, fx, fy);
-    cudaArray_t array;
-    cudaStream_t stream;
 
-    cudaChannelFormatDesc channelDesc =
-        cudaCreateChannelDesc<float4>();
-
+    // Create buffer for image output
+    std::string out_dir = args["write_images"].as<std::string>();
     std::vector<float> buf;
     if (out_dir.size())
     {
-        std::filesystem::create_directories(out_dir);
-        // std::filesystem::create_directories(out_dir + "/plenoctree");
-        // std::filesystem::create_directories(out_dir + "/copy");
-        // std::filesystem::create_directories(out_dir + "/trans");
-        // std::filesystem::create_directories(out_dir + "/rotate");
-        buf.resize(4 * width * height);
+        fs::create_directories(out_dir);
+        buf.resize(RenderContext::CHANNELS * width * height);
     }
 
+    // Create cuda resources
+    cudaArray_t array;
+    cudaStream_t stream;
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float4>();
     cuda(MallocArray(&array, &channelDesc, width, height));
     cuda(StreamCreateWithFlags(&stream, cudaStreamDefault));
     cudaArray_t depth_arr = nullptr; // Not using depth buffer
@@ -306,7 +277,21 @@ int main(int argc, char *argv[])
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // options
+    // // Create torch resource
+    // at::cuda::CUDAStreamGuard stream_guard(at::cuda::CUDAStream(stream));
+    // torch::TensorOptions tensor_options =
+    //     torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
+    // auto aux_buffer = torch::zeros({height, width, 8}, tensor_options);
+    // // std::cout << Denoiser::test() << std::endl;
+    // // auto tensor = torch::zeros({2, 3});
+    // // std::cout << tensor << std::endl;
+
+    // Prepare render context
+    RenderContext ctx;
+    ctx.offscreen  = true;
+    ctx.update(array, nullptr, width, height);
+
+    // Load render options
     RenderOptions options;
     // if (dataset_type == "blender") {
         //auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
@@ -322,31 +307,15 @@ int main(int argc, char *argv[])
          // json j = options;
          // o << std::setw(2) << j << std::endl;
     // }
-    
 
-    RenderContext ctx;
-    ctx.resize(width, height);
-    ctx.clearHistory();
-
-    at::cuda::CUDAStreamGuard stream_guard(at::cuda::CUDAStream(stream));
-    torch::TensorOptions tensor_options =
-        torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
-    auto rgba_noisy  = torch::zeros({height, width, 4}, tensor_options);
-    auto depth_noisy = torch::zeros({height, width, 1}, tensor_options);
-    ctx.rgba_noisy   = (float4*)rgba_noisy.data_ptr();
-    ctx.depth_noisy  = (float *)depth_noisy.data_ptr();
-
-    // std::cout << Denoiser::test() << std::endl;
-    // auto tensor = torch::zeros({2, 3});
-    // std::cout << tensor << std::endl;
-
+    // Begin render
     cudaEventRecord(start);
     for (size_t i = 0; i < trans.size(); ++i)
     {
         camera.transform = trans[i];
         camera._update(false);
 
-        launch_renderer(tree, camera, options, array, depth_arr, stream, ctx, true);
+        launch_renderer(tree, camera, options, ctx, stream, true);
         // auto buffers_in = torch::cat(
         //     {
         //         rgba_noisy.permute({2, 0, 1}),   // [4, H, W]
@@ -381,29 +350,18 @@ int main(int argc, char *argv[])
         {
             cuda(Memcpy(
                 buf.data(),
-                rgba_noisy.data_ptr(),
-                sizeof(float4) * width * height,
+                ctx.aux_buffer,
+                sizeof(float) * RenderContext::CHANNELS * width * height,
                 cudaMemcpyDeviceToHost));
             auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-            for (int j = 0; j < buf_uint8.size(); j++) {
-                buf_uint8[j] = buf[j] * 255;
+            for (int j = 0; j < width * height; j++) {
+                buf_uint8[j * 4]     = buf[j * 8] * 255;
+                buf_uint8[j * 4 + 1] = buf[j * 8 + 1] * 255;
+                buf_uint8[j * 4 + 2] = buf[j * 8 + 2] * 255;
+                buf_uint8[j * 4 + 3] = buf[j * 8 + 3] * 255;
             }
             std::string fpath = out_dir + "/rgba_" + basenames[i] + ".png";
             internal::write_png_file(fpath, buf_uint8.data(), width, height);
-        }
-        {
-            cuda(Memcpy(
-                buf.data(),
-                depth_noisy.data_ptr(),
-                sizeof(float) * width * height,
-                cudaMemcpyDeviceToHost));
-            auto buf_uint8 = std::vector<uint8_t>(width * height);
-            for (int j = 0; j < buf_uint8.size(); j++) {
-                buf_uint8[j] = buf[j] * 255;
-            }
-            std::string fpath = out_dir + "/depth_" + basenames[i] + ".png";
-            internal::write_png_file(
-                fpath, buf_uint8.data(), width, height, true);
         }
     }
     cudaEventRecord(stop);
@@ -415,7 +373,7 @@ int main(int argc, char *argv[])
     printf("%.10f ms per frame\n", milliseconds);
     printf("%.10f fps\n", 1000.f / milliseconds);
 
+    ctx.freeResource();
     cuda(FreeArray(array));
     cuda(StreamDestroy(stream));
-    ctx.freeResource();
 }

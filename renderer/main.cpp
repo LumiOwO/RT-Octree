@@ -236,21 +236,28 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
     }
 
     ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
-    if (ImGui::CollapsingHeader("Delta Tracking")) {
-        ImGui::Checkbox("Enable", &rend.options.delta_tracking);
-        ImGui::SameLine();
+    if (ImGui::CollapsingHeader("Regular Tracking")) {
         ImGui::Checkbox("Denoise", &rend.options.denoise);
-        ImGui::SameLine();
-        if (ImGui::Button("Clear History")) {
-            rend.options.p_ctx->clearHistory();
+
+        int& spp = rend.options.spp;
+        if (!rend.options.denoise) {
+            ImGui::TextUnformatted("spp");
+            ImGui::SameLine();
+            ImGui::RadioButton("1", &spp, 1);
+            ImGui::SameLine();
+            ImGui::RadioButton("2", &spp, 2);
+            ImGui::SameLine();
+            ImGui::RadioButton("4", &spp, 4);
+            ImGui::SameLine();
+            ImGui::RadioButton("8", &spp, 8);
+            ImGui::SameLine();
+            ImGui::RadioButton("16", &spp, 16);
+            ImGui::SameLine();
+            ImGui::RadioButton("32", &spp, 32);
+        } else {
+            spp = RenderOptions::SPP_DEFAULT;
         }
-        // temporal
-        ImGui::Checkbox("Clamp", &rend.options.clamp);
-        ImGui::SliderInt("Support", &rend.options.clamp_support, 0, 3);
-        ImGui::SliderFloat("Range", &rend.options.clamp_k, 0.0f, 5.0f);
-        ImGui::SliderFloat("Prev Weight", &rend.options.prev_weight, 0, 30);
-        ImGui::SliderInt("Context Buffer", &rend.options.show_ctx, 0, 4);
-        ImGui::SliderFloat("Depth Diff Thresh", &rend.options.depth_diff_thresh, 0, 2);
+        
     }
 
     ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);

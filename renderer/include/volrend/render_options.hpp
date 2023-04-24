@@ -53,18 +53,10 @@ struct RenderOptions {
     float probe[3] = {0.f, 0.f, 1.f};
     int probe_disp_size = 100;
 
-    // * Delta tracking options
-    RenderContext* p_ctx = nullptr;
-    bool delta_tracking = true;
+    // * Regular tracking options
+    constexpr static const int SPP_DEFAULT = 4;
     bool denoise = true;
     int spp = 1;
-    // denoise
-    bool clamp = true;
-    int clamp_support = 2;
-    float clamp_k = 1.0f;
-    float prev_weight = 9;
-    int show_ctx = 4;
-    float depth_diff_thresh = 9.3f;
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(
         RenderOptions,
@@ -84,7 +76,6 @@ struct RenderOptions {
         probe,
         probe_disp_size,
 
-        delta_tracking,
         denoise,
         spp
         );
