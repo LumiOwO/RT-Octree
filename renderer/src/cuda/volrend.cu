@@ -249,15 +249,14 @@ __global__ static void render_kernel(
 
 template <int SPP>
 __global__ static void render_kernel_delta_trace(
-    cudaSurfaceObject_t surf_obj,
-    cudaSurfaceObject_t surf_obj_depth,
-    CameraSpec          cam,
-    TreeSpec            tree,
-    RenderOptions       opt,
-    float*              probe_coeffs,
-    RenderContext       ctx,  // use value, not reference
-    bool                offscreen) {
-    CUDA_GET_THREAD_ID(idx, cam.width * cam.height);
+    const CameraSpec    cam,
+    const TreeSpec      tree,
+    const RenderOptions opt,
+    const float*        probe_coeffs,
+    RenderContext ctx  // use value, not reference
+) {
+    const int SIZE = cam.width * cam.height;
+    CUDA_GET_THREAD_ID(idx, SIZE);
 
     const int x = idx % cam.width, y = idx / cam.width;
     float     dir[3], cen[3], out[4];
@@ -310,10 +309,10 @@ __global__ static void render_kernel_delta_trace(
             cen[i] = tree.offset[i] + tree.scale[i] * cen[i];
         }
 
-        if (!offscreen) {
+        if (!ctx.offscreen) {
             surf2Dread(
                 &t_max,
-                surf_obj_depth,
+                ctx.surf_obj_depth,
                 x * sizeof(float),
                 y,
                 cudaBoundaryModeZero);
@@ -327,19 +326,20 @@ __global__ static void render_kernel_delta_trace(
     }
 
     float rgbx_init[4];
-    if (!offscreen) {
+    if (!ctx.offscreen) {
         // Read existing values for compositing (with meshes)
         surf2Dread(
             reinterpret_cast<float4*>(rgbx_init),
-            surf_obj,
+            ctx.surf_obj,
             x * (int)sizeof(float4),
             y,
             cudaBoundaryModeZero);
     }
 
+    // TODO: remove Output pixel color
     // Compositing with existing color
     const float nalpha = 1.f - out[3];
-    if (offscreen) {
+    if (ctx.offscreen) {
         const float remain = opt.background_brightness * nalpha;
         out[0] += remain;
         out[1] += remain;
@@ -354,7 +354,7 @@ __global__ static void render_kernel_delta_trace(
     float rgbx[4] = {out[0], out[1], out[2], 1.0f};
     surf2Dwrite(
         *reinterpret_cast<float4*>(rgbx),
-        surf_obj,
+        ctx.surf_obj,
         x * (int)sizeof(float4),
         y,
         cudaBoundaryModeZero);  // squelches out-of-bound writes
@@ -371,15 +371,42 @@ __global__ static void render_kernel_delta_trace(
     // float& dst_d = ctx.data[CUR_D][idx];
     // dst_d = depth * alpha + dst_d * n_alpha;
 
-    float* aux_buffer = &ctx.aux_buffer[idx << 3];
-    aux_buffer[0]     = out[0];
-    aux_buffer[1]     = out[1];
-    aux_buffer[2]     = out[2];
-    aux_buffer[3]     = out[3];
-    aux_buffer[4]     = out[0] * out[0];
-    aux_buffer[5]     = out[1] * out[1];
-    aux_buffer[6]     = out[2] * out[2];
-    aux_buffer[7]     = out[3] * out[3];
+    // float* aux_buffer = &ctx.aux_buffer[idx << 3];
+    // aux_buffer[0]     = out[0];
+    // aux_buffer[1]     = out[1];
+    // aux_buffer[2]     = out[2];
+    // aux_buffer[3]     = out[3];
+    // aux_buffer[4]     = out[0] * out[0];
+    // aux_buffer[5]     = out[1] * out[1];
+    // aux_buffer[6]     = out[2] * out[2];
+    // aux_buffer[7]     = out[3] * out[3];
+
+    // Write auxiliary buffer
+    int aux_idx             = idx;
+    ctx.aux_buffer[aux_idx] = out[0];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[1];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[2];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[3];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[0] * out[0];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[1] * out[1];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[2] * out[2];
+    aux_idx += SIZE;
+    ctx.aux_buffer[aux_idx] = out[3] * out[3];
+
+    // TODO: Write noisy image
+    //surf2Dwrite(
+    //    *reinterpret_cast<float4*>(out),
+    //    ctx.noisy_surf_obj,
+    //    x * (int)sizeof(float4),
+    //    y,
+    //    cudaBoundaryModeZero);
+
     // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
     // rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
 
@@ -434,86 +461,65 @@ __host__ void launch_renderer(
         case 1:
             device::render_kernel_delta_trace<1>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         case 2:
             device::render_kernel_delta_trace<2>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         case 3:
             device::render_kernel_delta_trace<3>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         case 4:
             device::render_kernel_delta_trace<4>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         case 8:
             device::render_kernel_delta_trace<8>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         case 16:
             device::render_kernel_delta_trace<16>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         case 32:
             device::render_kernel_delta_trace<32>
                 <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    ctx.surf_obj,
-                    ctx.surf_obj_depth,
                     cam,
                     tree,
                     options,
                     probe_coeffs,
-                    ctx,
-                    offscreen);
+                    ctx);
             break;
         default:
             throw std::runtime_error(

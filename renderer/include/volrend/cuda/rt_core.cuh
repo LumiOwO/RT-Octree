@@ -333,10 +333,10 @@ __device__ __inline__ void delta_trace_ray(
     scalar_t* __restrict__ dir,
     const scalar_t* __restrict__ vdir,
     const scalar_t* __restrict__ cen,
-    RenderOptions opt,
-    float         tmax_bg,
+    const RenderOptions& __restrict__ opt,
+    float tmax_bg,
     scalar_t* __restrict__ out,
-    pcg32& rng) {
+    pcg32& __restrict__ rng) {
 
     const float delta_scale = _get_delta_scale(
             tree.scale, /*modifies*/ dir);
