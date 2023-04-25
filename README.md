@@ -37,6 +37,12 @@ DATASET=test
 ./data/nerf_synthetic/$SCENE/noisy/$DATASET
 ```
 
+
+### Temp Fix
+- Windows .cu files include torch.h compile error
+
+goto `libtorch/include/c10/macros/Macros.h`, Line 334, add `defined(_MSC_VER)` to first if branch to suppress `_wassert` redeclaration.
+
 ---
 
 

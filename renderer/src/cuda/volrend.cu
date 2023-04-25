@@ -109,24 +109,6 @@ __host__ __device__ __inline__ scalar_t luminance(
     return _dot3(rgb, coe);
 }
 
-__device__ __inline__ void read_rgba_float4(
-        const float* img_arr, float* rgba, int i) {
-    i <<= 2; // i *= 4;
-    rgba[0] = img_arr[i];
-    rgba[1] = img_arr[i + 1];
-    rgba[2] = img_arr[i + 2];
-    rgba[3] = img_arr[i + 3];
-}
-
-__device__ __inline__ void write_rgba_float4(
-        float* img_arr, const float* rgba, int i) {
-    i <<= 2; // i *= 4;
-    img_arr[i] = rgba[0];
-    img_arr[i + 1] = rgba[1];
-    img_arr[i + 2] = rgba[2];
-    img_arr[i + 3] = rgba[3];
-}
-
 __device__ __inline__ float clamp(
         float x, float min_val, float max_val) {
     return fminf(fmaxf(x, min_val), max_val);
@@ -336,7 +318,6 @@ __global__ static void render_kernel_delta_trace(
             cudaBoundaryModeZero);
     }
 
-    // TODO: remove Output pixel color
     // Compositing with existing color
     const float nalpha = 1.f - out[3];
     if (ctx.offscreen) {
@@ -349,37 +330,6 @@ __global__ static void render_kernel_delta_trace(
         out[1] += rgbx_init[1] * nalpha;
         out[2] += rgbx_init[2] * nalpha;
     }
-
-    // Output pixel color
-    float rgbx[4] = {out[0], out[1], out[2], 1.0f};
-    surf2Dwrite(
-        *reinterpret_cast<float4*>(rgbx),
-        ctx.surf_obj,
-        x * (int)sizeof(float4),
-        y,
-        cudaBoundaryModeZero);  // squelches out-of-bound writes
-
-    // write float colors into delta tracking context
-    // float&& alpha = 1.0f / ctx.spp;
-    // float&& n_alpha = 1.0f - alpha;
-    // float* dst = &ctx.data[CUR_RGBA][idx << 2];
-    // dst[0] = out[0] * alpha + dst[0] * n_alpha;
-    // dst[1] = out[1] * alpha + dst[1] * n_alpha;
-    // dst[2] = out[2] * alpha + dst[2] * n_alpha;
-    // dst[3] = out[3] * alpha + dst[3] * n_alpha;
-
-    // float& dst_d = ctx.data[CUR_D][idx];
-    // dst_d = depth * alpha + dst_d * n_alpha;
-
-    // float* aux_buffer = &ctx.aux_buffer[idx << 3];
-    // aux_buffer[0]     = out[0];
-    // aux_buffer[1]     = out[1];
-    // aux_buffer[2]     = out[2];
-    // aux_buffer[3]     = out[3];
-    // aux_buffer[4]     = out[0] * out[0];
-    // aux_buffer[5]     = out[1] * out[1];
-    // aux_buffer[6]     = out[2] * out[2];
-    // aux_buffer[7]     = out[3] * out[3];
 
     // Write auxiliary buffer
     int aux_idx             = idx;
@@ -399,18 +349,15 @@ __global__ static void render_kernel_delta_trace(
     aux_idx += SIZE;
     ctx.aux_buffer[aux_idx] = out[3] * out[3];
 
-    // TODO: Write noisy image
-    //surf2Dwrite(
-    //    *reinterpret_cast<float4*>(out),
-    //    ctx.noisy_surf_obj,
-    //    x * (int)sizeof(float4),
-    //    y,
-    //    cudaBoundaryModeZero);
-
-    // rgba_noisy.w = 1.0f - __expf(-out[3]); // normalization
-    // rgba_noisy.w = fminf(out[3] * 0.001f, 1.0f); // normalization
-
-    // ctx.depth_noisy[idx] = fminf(depth * 0.3f, 1.0f);
+    // Write image
+    out[3] = 1.0f;
+    cudaSurfaceObject_t dst = opt.denoise ? ctx.noisy_surf_obj : ctx.surf_obj;
+    surf2Dwrite(
+        *reinterpret_cast<float4*>(out),
+        dst,
+        x * (int)sizeof(float4),
+        y,
+        cudaBoundaryModeZero);
 }
 
 __global__ static void retrieve_cursor_lumisphere_kernel(

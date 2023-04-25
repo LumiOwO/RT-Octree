@@ -12,6 +12,7 @@
 
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/renderer_kernel.hpp"
+#include "volrend/denoiser/denoiser.hpp"
 #include "volrend/internal/imwrite.hpp"
 #include "pcg32.h"
 
@@ -118,7 +119,12 @@ struct VolumeRenderer::Impl {
 
         if (tree != nullptr) {
             cuda(GraphicsMapResources(2, &cgr[buf_index * 2], stream));
+
             launch_renderer(*tree, camera, options, ctx[buf_index], stream);
+            if (options.denoise) {
+                denoiser.denoise(camera, ctx[buf_index], stream);
+            }
+
             cuda(GraphicsUnmapResources(2, &cgr[buf_index * 2], stream));
         }
 
@@ -171,7 +177,6 @@ struct VolumeRenderer::Impl {
         }
         cuda(GraphicsUnmapResources(cgr.size(), cgr.data(), 0));
 
-        // TODO: Update rendering context
         for (int index = 0; index < 2; index++) {
             ctx[index].update(ca[index * 2], ca[index * 2 + 1], width, height);
         }
@@ -220,6 +225,7 @@ struct VolumeRenderer::Impl {
 
     // Render contexts
     std::array<RenderContext, 2> ctx;
+    Denoiser denoiser;
 };
 
 VolumeRenderer::VolumeRenderer()

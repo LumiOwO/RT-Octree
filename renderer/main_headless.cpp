@@ -1,5 +1,3 @@
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
 #include <stdint.h>
 
 #include <cmath>
@@ -277,19 +275,14 @@ int main(int argc, char *argv[])
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // // Create torch resource
-    // at::cuda::CUDAStreamGuard stream_guard(at::cuda::CUDAStream(stream));
-    // torch::TensorOptions tensor_options =
-    //     torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
-    // auto aux_buffer = torch::zeros({height, width, 8}, tensor_options);
-    // // std::cout << Denoiser::test() << std::endl;
-    // // auto tensor = torch::zeros({2, 3});
-    // // std::cout << tensor << std::endl;
-
     // Prepare render context
     RenderContext ctx;
     ctx.offscreen  = true;
     ctx.update(array, nullptr, width, height);
+
+    // Create denoiser
+    // std::cout << Denoiser::test() << std::endl;
+    Denoiser denoiser;
 
     // Load render options
     RenderOptions options;
@@ -308,6 +301,16 @@ int main(int argc, char *argv[])
          // o << std::setw(2) << j << std::endl;
     // }
 
+    // Warm up
+    camera.transform = trans[0];
+    camera._update(false);
+    for (int i = 0; i < 100; i++) {
+        launch_renderer(tree, camera, options, ctx, stream, true);
+        if (options.denoise) {
+            denoiser.denoise(camera, ctx, stream);
+        }
+    }
+
     // Begin render
     cudaEventRecord(start);
     for (size_t i = 0; i < trans.size(); ++i)
@@ -316,16 +319,11 @@ int main(int argc, char *argv[])
         camera._update(false);
 
         launch_renderer(tree, camera, options, ctx, stream, true);
-        // auto buffers_in = torch::cat(
-        //     {
-        //         rgba_noisy.permute({2, 0, 1}),   // [4, H, W]
-        //         depth_noisy.permute({2, 0, 1}),  // [1, H, W]
-        //     },
-        //     /*dim=*/0);
-        // std::cout << "rgba_noisy " << rgba_noisy.select(2, 3).min() << ", "
-        //           << rgba_noisy.select(2, 3).max() << std::endl;
-        // std::cout << "depth_noisy " << depth_noisy.min() << ", "
-        //           << depth_noisy.max() << std::endl;
+        if (options.denoise) {
+            denoiser.denoise(camera, ctx, stream);
+        }
+
+
         if (!out_dir.size()) {
             continue;
         }

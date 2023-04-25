@@ -277,20 +277,27 @@ set ( COMMON_HPP_PATH "${PROJECT_BINARY_DIR}/include/volrend/common.hpp" )
 configure_file( common.hpp.in "${COMMON_HPP_PATH}" )
 set ( VOLREND_PUBLIC_HEADERS ${VOLREND_PUBLIC_HEADERS} "${COMMON_HPP_PATH}")
 
+# Add denoiser library
+set( DENOISER_EXTENSION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../denoiser/extension" )
+set( DENOISER_LIB_NAME ${PROJ_LIB_NAME}_denoiser)
+set( DENOISER_HEADERS 
+    ${INCLUDE_DIR}/volrend/denoiser/denoiser.hpp 
+    ${DENOISER_EXTENSION_DIR}/filtering.h
+    )
+set( DENOISER_SOURCES 
+    ${SRC_DIR}/denoiser/denoiser.cpp 
+    ${DENOISER_EXTENSION_DIR}/filtering.cu
+    )
+add_library( ${DENOISER_LIB_NAME} STATIC ${DENOISER_SOURCES})
+if (WIN32)
+    set_target_properties( ${DENOISER_LIB_NAME} PROPERTIES OUTPUT_NAME "libvolrend_denoiser" )
+endif()
+
 # Add main library
 add_library( ${PROJ_LIB_NAME} STATIC ${VOLREND_SOURCES}
     ${IMGUI_SOURCES} ${VOLREND_VENDOR_SOURCES} )
 if (WIN32)
     set_target_properties( ${PROJ_LIB_NAME} PROPERTIES OUTPUT_NAME "libvolrend" )
-endif()
-
-# Add denoiser library
-set( DENOISER_LIB_NAME ${PROJ_LIB_NAME}_denoiser)
-set( DENOISER_HEADERS ${INCLUDE_DIR}/volrend/denoiser/denoiser.hpp )
-set( DENOISER_SOURCES ${SRC_DIR}/denoiser/denoiser.cpp )
-add_library( ${DENOISER_LIB_NAME} STATIC ${DENOISER_SOURCES})
-if (WIN32)
-    set_target_properties( ${DENOISER_LIB_NAME} PROPERTIES OUTPUT_NAME "libvolrend_denoiser" )
 endif()
 
 
@@ -315,6 +322,20 @@ else(_VOLREND_USE_CUDA)
     add_dependencies( ${PROJ_LIB_NAME} shader_inline )
 endif(_VOLREND_USE_CUDA)
 
+# Denoiser library
+target_include_directories(
+    ${DENOISER_LIB_NAME} PUBLIC
+    $<BUILD_INTERFACE:${INCLUDE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<BUILD_INTERFACE:${DENOISER_EXTENSION_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+target_link_libraries( ${DENOISER_LIB_NAME}
+    ${TORCH_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT}
+    ${CMAKE_DL_LIBS}
+    )
+
 # Main library
 target_include_directories(
     ${PROJ_LIB_NAME} PUBLIC
@@ -331,19 +352,10 @@ target_link_libraries( ${PROJ_LIB_NAME} PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
     ${CMAKE_DL_LIBS}
     )
+target_link_libraries( ${PROJ_LIB_NAME} PRIVATE
+    $<BUILD_INTERFACE:${DENOISER_LIB_NAME}>
+    )
 
-# Denoiser library
-target_include_directories(
-    ${DENOISER_LIB_NAME} PUBLIC
-    $<BUILD_INTERFACE:${INCLUDE_DIR}>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    )
-target_link_libraries( ${DENOISER_LIB_NAME}
-    ${TORCH_LIBRARIES}
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${CMAKE_DL_LIBS}
-    )
 
 if (EMSCRIPTEN)
     include_directories ( )
@@ -437,7 +449,7 @@ else (EMSCRIPTEN)
             PUBLIC_HEADER "${VOLREND_PUBLIC_HEADERS}"
             )
 
-        set( INSTALL_TARGETS ${PROJ_LIB_NAME})
+        set( INSTALL_TARGETS ${PROJ_LIB_NAME} ${DENOISER_LIB_NAME})
         if (NOT ZLIB_FOUND)
             set (INSTALL_TARGETS ${INSTALL_TARGETS} zlibstatic)
         endif()
@@ -450,6 +462,9 @@ else (EMSCRIPTEN)
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/volrend
             )
+        export(TARGETS ${DENOISER_LIB_NAME}
+            NAMESPACE volrend::
+            FILE "${CMAKE_CURRENT_BINARY_DIR}/${DENOISER_LIB_NAME}Config.cmake")
         export(TARGETS ${PROJ_LIB_NAME}
             NAMESPACE volrend::
             FILE "${CMAKE_CURRENT_BINARY_DIR}/${PROJ_LIB_NAME}Config.cmake")
@@ -466,7 +481,7 @@ else (EMSCRIPTEN)
 
     macro(VOLREND_ADD_EXECUTABLE target_name output_name main_file)
         add_executable( ${target_name} ${main_file} )
-        target_link_libraries( ${target_name} ${PROJ_LIB_NAME} ${DENOISER_LIB_NAME} )
+        target_link_libraries( ${target_name} ${PROJ_LIB_NAME} )
         set_target_properties( ${target_name} PROPERTIES OUTPUT_NAME ${output_name} )
         if(WIN32 AND _VOLREND_USE_CUDA)
             set_target_properties( ${target_name}

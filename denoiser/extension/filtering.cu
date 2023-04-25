@@ -1,7 +1,6 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_fp16.h>
-#include <torch/extension.h>
 
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/native/cuda/KernelUtils.cuh>
@@ -12,14 +11,15 @@
     TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) \
     TORCH_CHECK(x.is_contiguous(), #x " must be a contiguous tensor")
-#define CHECK_IS_INT(x)                                 \
-    TORCH_CHECK(x.scalar_type() == at::ScalarType::Int, \
-                #x " must be an int tensor")
-#define CHECK_IS_FLOATING(x)                                   \
-    TORCH_CHECK(x.scalar_type() == at::ScalarType::Float ||    \
-                    x.scalar_type() == at::ScalarType::Half || \
-                    x.scalar_type() == at::ScalarType::Double, \
-                #x " must be a floating tensor")
+#define CHECK_IS_INT(x) \
+    TORCH_CHECK(        \
+        x.scalar_type() == at::ScalarType::Int, #x " must be an int tensor")
+#define CHECK_IS_FLOATING(x)                           \
+    TORCH_CHECK(                                       \
+        x.scalar_type() == at::ScalarType::Float ||    \
+            x.scalar_type() == at::ScalarType::Half || \
+            x.scalar_type() == at::ScalarType::Double, \
+        #x " must be a floating tensor")
 
 // Maps to a single instruction on G8x / G9x / G10x
 #define IMAD(a, b, c) (__mul24((a), (b)) + (c))
@@ -38,49 +38,90 @@ namespace denoiser {
 
 namespace kernel {
 
-__device__ __forceinline__ float  _exp(const float x) { return __expf(x); }
-__device__ __forceinline__ double _exp(const double x) { return exp(x); }
-__device__ __forceinline__ c10::Half _exp(const c10::Half x) { return hexp(x); }
+template <typename OutputType, bool OVERRIDE>
+__device__ __forceinline__ void write_to_img_out(
+    OutputType    img_out,
+    const float4& rgba,
+    const int     idx,
+    const int     ix,
+    const int     iy);
 
-template <typename scalar_t>
-__global__ void weights_softmax(const int SIZE, const int L, scalar_t* input) {
-    // locate
-    CUDA_GET_THREAD_ID(idx, SIZE);
-    input += idx * (L << 1);
+template <>
+__device__ __forceinline__ void write_to_img_out<float*, true>(
+    float*        img_out,
+    const float4& rgba,
+    const int     idx,
+    const int     ix,
+    const int     iy) {
 
-    scalar_t max_val = input[0];
-    for (int i = 1; i < L; i++) {
-        max_val = fmaxf(max_val, input[i << 1]);
-    }
-
-    scalar_t sum = 0;
-    for (int i = 0; i < L; i++) {
-        auto& w = input[i << 1];
-        w = _exp(w - max_val);
-        sum += w;
-    }
-
-    const scalar_t inv_sum = 1 / sum;
-    for (int i = 0; i < L; i++) {
-        input[i << 1] *= inv_sum;
-    }
+    img_out += (idx << 2);
+    img_out[0] = rgba.x;
+    img_out[1] = rgba.y;
+    img_out[2] = rgba.z;
+    img_out[3] = 1.0f;
 }
 
-template <int BLOCK_H, int BLOCK_W, int SUPPORT>
+template <>
+__device__ __forceinline__ void write_to_img_out<float*, false>(
+    float*        img_out,
+    const float4& rgba,
+    const int     idx,
+    const int     ix,
+    const int     iy) {
+
+    img_out += (idx << 2);
+    img_out[0] += rgba.x;
+    img_out[1] += rgba.y;
+    img_out[2] += rgba.z;
+}
+
+template <>
+__device__ __forceinline__ void write_to_img_out<cudaSurfaceObject_t, true>(
+    cudaSurfaceObject_t img_out,
+    const float4&       rgba,
+    const int           idx,
+    const int           ix,
+    const int           iy) {
+
+    surf2Dwrite(
+        rgba, img_out, ix * (int)sizeof(float4), iy, cudaBoundaryModeZero);
+}
+
+template <>
+__device__ __forceinline__ void write_to_img_out<cudaSurfaceObject_t, false>(
+    cudaSurfaceObject_t img_out,
+    const float4&       rgba,
+    const int           idx,
+    const int           ix,
+    const int           iy) {
+
+    float4 out = {};
+    surf2Dread(
+        &out, img_out, ix * (int)sizeof(float4), iy, cudaBoundaryModeZero);
+
+    out.x += rgba.x;
+    out.y += rgba.y;
+    out.z += rgba.z;
+
+    surf2Dwrite(
+        out, img_out, ix * (int)sizeof(float4), iy, cudaBoundaryModeZero);
+}
+
+template <typename OutputType, int BLOCK_H, int BLOCK_W, int SUPPORT>
 __global__ void applying(
     const int           H,
     const int           W,
-    cudaTextureObject_t imgs_in_tex,       // [H, W, 4]
+    cudaTextureObject_t img_in_tex,        // [H, W, 4]
     cudaTextureObject_t kernel_tex,        // [H, W, 4]
     const float* __restrict__ weight_map,  // [H, W]
-    float* imgs_out,                       // [H, W, 4]
-    float* rgb_filtered,                   // [H, W, 4]
-    float* max_map,                        // [H, W]
-    float* inv_kernel_sum                  // [H, W]
+    OutputType img_out,                    // [H, W, 4]
+    float* __restrict__ rgb_filtered,      // [H, W, 4]
+    float* __restrict__ max_map,           // [H, W]
+    float* __restrict__ inv_kernel_sum     // [H, W]
 ) {
     constexpr int SUPPORT2 = SUPPORT * 2;
-    constexpr int TILE_H = BLOCK_H + SUPPORT2;
-    constexpr int TILE_W = BLOCK_W + SUPPORT2;
+    constexpr int TILE_H   = BLOCK_H + SUPPORT2;
+    constexpr int TILE_W   = BLOCK_W + SUPPORT2;
 
     // locate
     const int ix = IMAD(blockDim.x, blockIdx.x, threadIdx.x);  // col
@@ -92,21 +133,21 @@ __global__ void applying(
     __shared__ float4 rgba_tile[TILE_H][TILE_W];
     __shared__ float  kernel_tile[TILE_H][TILE_W];
 
-#define __LOAD(tile_x, tile_y, image_x, image_y)                    \
-    do {                                                            \
-        int _tx = (tile_x);                                         \
-        int _ty = (tile_y);                                         \
-        int _ix = (image_x);                                        \
-        int _iy = (image_y);                                        \
-        if (_iy >= 0 && _iy < H && _ix >= 0 && _ix < W) {           \
-            rgba_tile[_ty][_tx] =                                   \
-                tex2D<float4>(imgs_in_tex, _ix + 0.5f, _iy + 0.5f); \
-            kernel_tile[_ty][_tx] =                                 \
-                tex2D<float>(kernel_tex, _ix + 0.5f, _iy + 0.5f);   \
-        } else {                                                    \
-            rgba_tile[_ty][_tx]   = float4{0, 0, 0, 0};             \
-            kernel_tile[_ty][_tx] = -FLT_MAX;                       \
-        }                                                           \
+#define __LOAD(tile_x, tile_y, image_x, image_y)                   \
+    do {                                                           \
+        int _tx = (tile_x);                                        \
+        int _ty = (tile_y);                                        \
+        int _ix = (image_x);                                       \
+        int _iy = (image_y);                                       \
+        if (_iy >= 0 && _iy < H && _ix >= 0 && _ix < W) {          \
+            rgba_tile[_ty][_tx] =                                  \
+                tex2D<float4>(img_in_tex, _ix + 0.5f, _iy + 0.5f); \
+            kernel_tile[_ty][_tx] =                                \
+                tex2D<float>(kernel_tex, _ix + 0.5f, _iy + 0.5f);  \
+        } else {                                                   \
+            rgba_tile[_ty][_tx]   = float4{0, 0, 0, 0};            \
+            kernel_tile[_ty][_tx] = -FLT_MAX;                      \
+        }                                                          \
     } while (0)
 
     // left-up
@@ -130,7 +171,7 @@ __global__ void applying(
 
     __syncthreads();
 #undef __LOAD
-    
+
     // if (ix == 0 && iy == 0) {
     //     printf("%d x %d\n", TILE_H, TILE_W);
     //     printf("rgba_tile\n");
@@ -155,8 +196,6 @@ __global__ void applying(
         return;
     }
     const int idx = IMAD(iy, W, ix);
-    weight_map += idx;
-    imgs_out   += (idx << 2);
 
     float max_val = -FLT_MAX;
     for (int dy = 0; dy <= SUPPORT2; dy++) {
@@ -166,78 +205,48 @@ __global__ void applying(
     }
 
     // apply
-    float3 rgb = {0, 0, 0};
-    float kernel_sum = 0;
+    float4 rgba       = {0.f, 0.f, 0.f, 1.f};
+    float  kernel_sum = 0;
     for (int dy = 0; dy <= SUPPORT2; dy++) {
-        // int _iy = iy - SUPPORT + dy;
-        // if (_iy < 0 || _iy >= H) continue;
         int _ty = ty + dy;
 
         for (int dx = 0; dx <= SUPPORT2; dx++) {
-            // int _ix = ix - SUPPORT + dx;
-            // if (_ix < 0 || _ix >= W) continue;
             int _tx = tx + dx;
 
             // compute
             float k = __expf(kernel_tile[_ty][_tx] - max_val);
             kernel_sum += k;
             auto& t_rgb = rgba_tile[_ty][_tx];
-            rgb.x += t_rgb.x * k;
-            rgb.y += t_rgb.y * k;
-            rgb.z += t_rgb.z * k;
+            rgba.x += t_rgb.x * k;
+            rgba.y += t_rgb.y * k;
+            rgba.z += t_rgb.z * k;
         }
     }
 
-    // accumulate
-    float w = weight_map[0] / kernel_sum;
-    // at::native::fastAtomicAdd(imgs_out, 0, 1, rgb.x * w, true);
-    // at::native::fastAtomicAdd(imgs_out, 1, 1, rgb.y * w, true);
-    // at::native::fastAtomicAdd(imgs_out, 2, 1, rgb.z * w, true);
-    // !!! IMPORTANT: only valid when all levels 
-    // !!!            are dispatched on the same stream!
-    imgs_out[0] += rgb.x * w;
-    imgs_out[1] += rgb.y * w;
-    imgs_out[2] += rgb.z * w;
-    if (SUPPORT == 1) {
-        // imgs_out[3] = rgba_tile[ty + SUPPORT][tx + SUPPORT].w;
-        imgs_out[3] = 1.0f;
-    }
-
+    const float inv = 1.0f / kernel_sum;
     // save for backward
     if (rgb_filtered != nullptr) {
-        rgb_filtered   += idx * IMG_CHANNELS;
+        rgb_filtered += idx * IMG_CHANNELS;
         max_map += idx;
         inv_kernel_sum += idx;
 
         max_map[0]        = max_val;
-        inv_kernel_sum[0] = 1.0f / kernel_sum;
-        rgb_filtered[0]   = rgb.x * inv_kernel_sum[0];
-        rgb_filtered[1]   = rgb.y * inv_kernel_sum[0];
-        rgb_filtered[2]   = rgb.z * inv_kernel_sum[0];
+        inv_kernel_sum[0] = inv;
+        rgb_filtered[0]   = rgba.x * inv;
+        rgb_filtered[1]   = rgba.y * inv;
+        rgb_filtered[2]   = rgba.z * inv;
     }
-}
 
-template <typename scalar_t>
-__global__ void normalize(
-    const int SIZE,
-    const scalar_t* __restrict__ weight_map,  // [H, W]
-    const scalar_t* __restrict__ rgb_sum,     // [H, W, 4]
-    const scalar_t* __restrict__ kernel_sum,  // [H, W]
-    scalar_t* imgs_out                        // [H, W, 4]
-) {
-
-    // locate
-    CUDA_GET_THREAD_ID(idx, SIZE);
-    weight_map += idx;
-    rgb_sum += idx * IMG_CHANNELS;
-    kernel_sum += idx;
-    imgs_out += idx * IMG_CHANNELS;
+    const float w = weight_map[idx] * inv;
+    rgba.x *= w;
+    rgba.y *= w;
+    rgba.z *= w;
 
     // accumulate
-    const scalar_t& k = weight_map[0] / kernel_sum[0];
-    gpuAtomicAdd(&imgs_out[0], k * rgb_sum[0]);
-    gpuAtomicAdd(&imgs_out[1], k * rgb_sum[1]);
-    gpuAtomicAdd(&imgs_out[2], k * rgb_sum[2]);
+    // !!! IMPORTANT: only valid when all levels
+    // !!!            are dispatched on the same stream!
+    constexpr bool OVERRIDE = (SUPPORT == 1);
+    write_to_img_out<OutputType, OVERRIDE>(img_out, rgba, idx, ix, iy);
 }
 
 template <typename scalar_t>
@@ -281,7 +290,7 @@ __global__ void grad_kernel_accumulate(
     const int W,
     const int support,
     const scalar_t* __restrict__ grad_output,     // [H, W, 4]
-    const scalar_t* __restrict__ imgs_in,         // [H, W, 4]
+    const scalar_t* __restrict__ img_in,          // [H, W, 4]
     const scalar_t* __restrict__ weight_map,      // [H, W]
     const scalar_t* __restrict__ rgb_filtered,    // [H, W, 4]
     const scalar_t* __restrict__ kernel_map,      // [H, W]
@@ -307,7 +316,7 @@ __global__ void grad_kernel_accumulate(
     const int neighbor_idx = lower_bound + neighbor_y * W + neighbor_x;
     // clang-format off
     grad_output    += pixel_idx * IMG_CHANNELS;
-    imgs_in        += neighbor_idx * IMG_CHANNELS;
+    img_in         += neighbor_idx * IMG_CHANNELS;
     weight_map     += pixel_idx;
     rgb_filtered   += pixel_idx * IMG_CHANNELS;
     kernel_map     += neighbor_idx;
@@ -317,91 +326,87 @@ __global__ void grad_kernel_accumulate(
     // clang-format on
 
     // accumulate grad
-    const scalar_t& k   = _exp(kernel_map[0] - max_map[0]) * inv_kernel_sum[0];
-    scalar_t res = 0;
-    res += grad_output[0] * (imgs_in[0] - rgb_filtered[0]);
-    res += grad_output[1] * (imgs_in[1] - rgb_filtered[1]);
-    res += grad_output[2] * (imgs_in[2] - rgb_filtered[2]);
+    const scalar_t& k   = __expf(kernel_map[0] - max_map[0]) * inv_kernel_sum[0];
+    scalar_t        res = 0;
+    res += grad_output[0] * (img_in[0] - rgb_filtered[0]);
+    res += grad_output[1] * (img_in[1] - rgb_filtered[1]);
+    res += grad_output[2] * (img_in[2] - rgb_filtered[2]);
     res *= weight_map[0] * k;
-    
+
     gpuAtomicAdd(&grad_kernel[0], res);
 }
 
 }  // namespace kernel
 
-#define __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, ...)   \
-    {                                                                  \
-        dim3 block_size;                                               \
-        block_size.x = BLOCK_W; /* col */                              \
-        block_size.y = BLOCK_H; /* row */                              \
-        block_size.z = 1;                                              \
-        dim3 grid_size;                                                \
-        grid_size.x = N_BLOCKS_NEEDED(W, BLOCK_W); /* col */           \
-        grid_size.y = N_BLOCKS_NEEDED(H, BLOCK_H); /* row */           \
-        grid_size.z = 1;                                               \
-        kernel::applying<BLOCK_H, BLOCK_W, SUPPORT>                    \
-            <<<grid_size, block_size, 0, STREAM>>>(H, W, __VA_ARGS__); \
-    }
+namespace host {
 
-#define __KERNEL_APPLY_SWITCH_H_W(STREAM, SUPPORT, H, W, ...)                 \
-    {                                                                         \
-        constexpr int BLOCK_H = 16;                                           \
-        constexpr int BLOCK_W = 32;                                           \
-        __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, __VA_ARGS__); \
-    }                                                                         \
-    // if (H == 800 && W == 800) {                                            \
-        /* nerf synthetic */                                                  \
-        constexpr int BLOCK_H = 32;                                           \
-        constexpr int BLOCK_W = 32;                                           \
-        __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, __VA_ARGS__); \
-    } else if (H == 756 && W == 1008) {                                       \
-        /* llff */                                                            \
-        constexpr int BLOCK_H = 16;                                           \
-        constexpr int BLOCK_W = 32;                                           \
-        __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, __VA_ARGS__); \
-    } else if (H == 1080 && W == 1920) {                                      \
-        /* tanks and temples */                                               \
-        constexpr int BLOCK_H = 16;                                           \
-        constexpr int BLOCK_W = 32;                                           \
-        __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, __VA_ARGS__); \
-    } else {                                                                  \
-        /* default */                                                         \
-        constexpr int BLOCK_H = 16;                                           \
-        constexpr int BLOCK_W = 32;                                           \
-        __KERNEL_APPLY(STREAM, SUPPORT, BLOCK_H, BLOCK_W, H, W, __VA_ARGS__); \
-    }
+template <typename OutputType>
+__host__ inline void kernel_apply(
+    cudaStream_t        stream,
+    const int           support,
+    const int           H,
+    const int           W,
+    cudaTextureObject_t img_in_tex,     // [H, W, 4]
+    cudaTextureObject_t kernel_tex,     // [H, W, 4]
+    const float*        weight_map,     // [H, W]
+    OutputType          img_out,        // [H, W, 4]
+    float*              rgb_filtered,   // [H, W, 4]
+    float*              max_map,        // [H, W]
+    float*              inv_kernel_sum  // [H, W]
+) {
+    constexpr int BLOCK_H = 16;
+    constexpr int BLOCK_W = 32;
 
-#define __KERNEL_APPLY_SWITCH_SUPPORT(STREAM, support, H, W, ...)     \
-    switch (support) {                                                \
-        case 1:                                                       \
-            __KERNEL_APPLY_SWITCH_H_W(STREAM, 1, H, W, __VA_ARGS__);  \
-            break;                                                    \
-        case 2:                                                       \
-            __KERNEL_APPLY_SWITCH_H_W(STREAM, 2, H, W, __VA_ARGS__);  \
-            break;                                                    \
-        case 3:                                                       \
-            __KERNEL_APPLY_SWITCH_H_W(STREAM, 3, H, W, __VA_ARGS__);  \
-            break;                                                    \
-        case 4:                                                       \
-            __KERNEL_APPLY_SWITCH_H_W(STREAM, 4, H, W, __VA_ARGS__);  \
-            break;                                                    \
-        case 5:                                                       \
-            __KERNEL_APPLY_SWITCH_H_W(STREAM, 5, H, W, __VA_ARGS__);  \
-            break;                                                    \
-        case 6:                                                       \
-            __KERNEL_APPLY_SWITCH_H_W(STREAM, 6, H, W, __VA_ARGS__);  \
-            break;                                                    \
-        default:                                                      \
-            throw std::runtime_error(                                 \
-                "Kernel size == " + std::to_string(support * 2 + 1) + \
-                " not supported.");                                   \
-    }
+    // Compute block & grid size
+    dim3          block_size;
+    block_size.x = BLOCK_W; /* col */
+    block_size.y = BLOCK_H; /* row */
+    block_size.z = 1;
+    dim3 grid_size;
+    grid_size.x = N_BLOCKS_NEEDED(W, BLOCK_W); /* col */
+    grid_size.y = N_BLOCKS_NEEDED(H, BLOCK_H); /* row */
+    grid_size.z = 1;
 
-#define KERNEL_APPLY(STREAM, support, H, W, ...) \
-    __KERNEL_APPLY_SWITCH_SUPPORT(STREAM, support, H, W, __VA_ARGS__)
+#define __ARGS_TEMP__                                                         \
+    H, W, img_in_tex, kernel_tex, weight_map, img_out, rgb_filtered, max_map, \
+        inv_kernel_sum
+
+    switch (support) {
+        case 1:
+            kernel::applying<OutputType, BLOCK_H, BLOCK_W, 1>
+                <<<grid_size, block_size, 0, stream>>>(__ARGS_TEMP__);
+            break;
+        case 2:
+            kernel::applying<OutputType, BLOCK_H, BLOCK_W, 2>
+                <<<grid_size, block_size, 0, stream>>>(__ARGS_TEMP__);
+            break;
+        case 3:
+            kernel::applying<OutputType, BLOCK_H, BLOCK_W, 3>
+                <<<grid_size, block_size, 0, stream>>>(__ARGS_TEMP__);
+            break;
+        case 4:
+            kernel::applying<OutputType, BLOCK_H, BLOCK_W, 4>
+                <<<grid_size, block_size, 0, stream>>>(__ARGS_TEMP__);
+            break;
+        case 5:
+            kernel::applying<OutputType, BLOCK_H, BLOCK_W, 5>
+                <<<grid_size, block_size, 0, stream>>>(__ARGS_TEMP__);
+            break;
+        case 6:
+            kernel::applying<OutputType, BLOCK_H, BLOCK_W, 6>
+                <<<grid_size, block_size, 0, stream>>>(__ARGS_TEMP__);
+            break;
+        default:
+            throw std::runtime_error(
+                "Kernel size == " + std::to_string(support * 2 + 1) +
+                " not supported.");
+    }
+#undef __ARGS_TEMP__
+
+}
 
 template <typename float_n>
-cudaTextureObject_t create_texture_from_tensor(
+__host__ cudaTextureObject_t create_texture_from_tensor(
     cudaArray_t&  cuArray,
     int           H,
     int           W,
@@ -419,21 +424,126 @@ cudaTextureObject_t create_texture_from_tensor(
         H,
         cudaMemcpyDeviceToDevice);
 
-    cudaResourceDesc resDesc   = {};
-    resDesc.resType            = cudaResourceTypeArray;
-    resDesc.res.array.array    = cuArray;
+    cudaResourceDesc resDesc = {};
+    resDesc.resType          = cudaResourceTypeArray;
+    resDesc.res.array.array  = cuArray;
 
-    cudaTextureDesc texDesc    = {};
-    texDesc.normalizedCoords   = false;
-    texDesc.filterMode         = cudaFilterModePoint;
-    texDesc.addressMode[0]     = cudaAddressModeWrap;
-    texDesc.addressMode[1]     = cudaAddressModeWrap;
-    texDesc.readMode           = cudaReadModeElementType;
+    cudaTextureDesc texDesc  = {};
+    texDesc.normalizedCoords = false;
+    texDesc.filterMode       = cudaFilterModePoint;
+    texDesc.addressMode[0]   = cudaAddressModeWrap;
+    texDesc.addressMode[1]   = cudaAddressModeWrap;
+    texDesc.readMode         = cudaReadModeElementType;
 
     cudaTextureObject_t texObj;
     cudaCreateTextureObject(&texObj, &resDesc, &texDesc, nullptr);
     return texObj;
 }
+
+template <typename OutputType>
+__host__ void accumulate_one_level(
+    cudaStream_t        stream,
+    const int           level,
+    const int           H,
+    const int           W,
+    const int           L,
+    cudaTextureObject_t img_in_tex,  // [H, W, 4]
+    cudaTextureObject_t kernel_tex,  // [H, W]
+    torch::Tensor       weight_map,  // [H, W]
+    OutputType          img_out,     // [H, W, 4]
+
+    // clang-format off
+    torch::autograd::variable_list& save
+    // clang-format on
+) {
+    // auto stream_guard =
+    //     at::cuda::CUDAStreamGuard(stream);
+
+    // tensors
+    bool need_save      = !save.empty();
+    auto rgb_filtered   = torch::Tensor();
+    auto max_map        = torch::Tensor();
+    auto inv_kernel_sum = torch::Tensor();
+    if (need_save) {
+        rgb_filtered = torch::zeros(
+            {weight_map.sizes()[0], weight_map.sizes()[1], 4},
+            torch::TensorOptions()
+                .device(weight_map.device())
+                .dtype(weight_map.dtype()));
+        max_map        = torch::zeros_like(weight_map);
+        inv_kernel_sum = torch::zeros_like(weight_map);
+    }
+
+    // apply kernel
+    kernel_apply<OutputType>(
+        stream,
+        level + 1,  // support
+        H,
+        W,
+        img_in_tex,
+        kernel_tex,
+        weight_map.data_ptr<float>(),
+        img_out,
+        (need_save ? rgb_filtered.data_ptr<float>() : nullptr),
+        (need_save ? max_map.data_ptr<float>() : nullptr),
+        (need_save ? inv_kernel_sum.data_ptr<float>() : nullptr));
+
+    // save tensors
+    if (need_save) {
+        int&& idx     = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
+        save[idx]     = rgb_filtered;
+        save[idx + 1] = max_map;
+        save[idx + 2] = inv_kernel_sum;
+    }
+}
+
+template <typename OutputType>
+__host__ void forward(
+    cudaStream_t        stream,
+    torch::Tensor       weight_map,  // [L, H, W]
+    torch::Tensor       kernel_map,  // [L, H, W]
+    cudaTextureObject_t img_in_tex,  // [H, W, 4]
+    OutputType          img_out,     // [H, W, 4]
+    // clang-format off
+    torch::autograd::variable_list& save
+    // ,int batch_idx
+    // clang-format on
+) {
+    const int L       = kernel_map.size(0);
+    const int H       = kernel_map.size(1);
+    const int W       = kernel_map.size(2);
+
+    // create kernel texture
+    auto kernel_cus  = std::vector<cudaArray_t>{};
+    auto kernel_texs = std::vector<cudaTextureObject_t>{};
+    for (int level = 0; level < L; level++) {
+        cudaArray_t         kernel_cu;
+        cudaTextureObject_t kernel_tex = create_texture_from_tensor<float>(
+            kernel_cu, H, W, kernel_map.index({level}));
+        kernel_cus.emplace_back(kernel_cu);
+        kernel_texs.emplace_back(kernel_tex);
+    }
+
+    for (int level = 0; level < L; level++) {
+        accumulate_one_level<OutputType>(
+            stream,
+            level,
+            H,
+            W,
+            L,
+            img_in_tex,
+            kernel_texs[level],
+            weight_map.index({level}),
+            img_out,
+            save);
+    }
+
+    for (int level = 0; level < L; level++) {
+        cudaDestroyTextureObject(kernel_texs[level]);
+        cudaFreeArray(kernel_cus[level]);
+    }
+}
+};  // namespace host
 
 class Filtering : public torch::autograd::Function<Filtering> {
 public:
@@ -446,30 +556,12 @@ public:
         // clang-format on
         torch::Tensor weight_map,  // [L, H, W]
         torch::Tensor kernel_map,  // [L, H, W]
-        torch::Tensor imgs_in,     // [H, W, 4]
+        torch::Tensor img_in,      // [H, W, 4]
         bool          requires_grad) {
 
-        const int L    = kernel_map.size(0);
-        const int H    = kernel_map.size(1);
-        const int W    = kernel_map.size(2);
-        // const int SIZE = B * H * W;
-        // std::cout << L << " " << H << " " << W << std::endl;
-        // std::cout << (uint64_t)imgs_out.data_ptr() << std::endl;
-
-        auto imgs_out = torch::zeros_like(imgs_in);  // [H, W, 4]
-        // imgs_out.select(-1, 3).fill_(1); // set alpha channel to 1
-        // std::cout << "imgs_out" << imgs_out << std::endl;
-
-        // // weight normalization
-        // const int weights_softmax_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
-        // AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-        //     kernel_map.type(), "forward_weights_softmax", ([&] {
-        //         kernel::weights_softmax<scalar_t>
-        //             <<<weights_softmax_blocks, N_THREADS, 0, stream>>>(
-        //                 SIZE, L, input.data_ptr<scalar_t>());
-        //     }));
-        // // permute
-        // input = input.permute({3, 0, 1, 2}).contiguous();  // [L * 2, H, W]
+        const int L = kernel_map.size(0);
+        const int H = kernel_map.size(1);
+        const int W = kernel_map.size(2);
 
         // variables to save
         auto save = torch::autograd::variable_list{};
@@ -478,202 +570,43 @@ public:
             save.resize(SAVED_INPUTS_CNT + L * SAVED_PER_LEVEL_CNT);
             save[0] = weight_map;
             save[1] = kernel_map;
-            save[2] = imgs_in;
+            save[2] = img_in;
         }
 
-        // create imgs_in texture
-        cudaArray_t imgs_in_cu;
-        cudaTextureObject_t imgs_in_tex =
-            create_texture_from_tensor<float4>(imgs_in_cu, H, W, imgs_in);
-        // create kernel texture
-        auto kernel_cus = std::vector<cudaArray_t>{};
-        auto kernel_texs = std::vector<cudaTextureObject_t>{};
-        for (int level = 0; level < L; level++) {
-            cudaArray_t         kernel_cu;
-            cudaTextureObject_t kernel_tex = create_texture_from_tensor<float>(
-                kernel_cu, H, W, kernel_map.index({level}));
-            kernel_cus.emplace_back(kernel_cu);
-            kernel_texs.emplace_back(kernel_tex);
-        }
-
-        // std::cout << "imgs_in_tex" << tex2D<float>(imgs_in_tex, 400 * 3 + .5f, 400.5f) << std::endl;
-        // std::cout << "kernel_tex"
-        //           << tex2D<float>(kernel_texs[0], 400.5f, 400.5f)
-        //           << std::endl;
-        // std::cout << "all kernel_map.sizes()" << kernel_map.sizes() << std::endl;
-        // std::cout << "all kernel_map.data_ptr()"
-        //           << (uint64_t)kernel_map.data_ptr<float>() << std::endl;
+        // create img_in texture
+        cudaArray_t         img_in_cu;
+        cudaTextureObject_t img_in_tex =
+            host::create_texture_from_tensor<float4>(img_in_cu, H, W, img_in);
+        
         // applying & fusing
-        auto stream = at::cuda::getCurrentCUDAStream();
-        // auto streams = std::vector<at::cuda::CUDAStream>{};
-        // streams.emplace_back(at::cuda::getCurrentCUDAStream());
-        // streams.emplace_back(at::cuda::getStreamFromPool());
-        // auto weight_cus = std::vector<cudaArray_t>{};
-        for (int level = 0; level < L; level++) {
-            // get current stream
-            // auto stream = at::cuda::getStreamFromPool();
-            // streams.emplace_back(stream);
-            // auto stream = streams[level & 0x1];
-
-            accumulate_one_level(
-                save,
-                stream,
-                level,
-                H,
-                W,
-                L,
-                imgs_in_tex,
-                kernel_texs[level],
-                kernel_map.index({level}),
-                weight_map.index({level}),
-                imgs_out);
-        }
-        // for (auto& stream : streams) {
-        //     cudaStreamSynchronize(stream);
-        // }
+        auto stream  = at::cuda::getCurrentCUDAStream();
+        auto img_out = torch::zeros_like(img_in);  // [H, W, 4]
+        host::forward<float*>(
+            stream,
+            weight_map,
+            kernel_map,
+            img_in_tex,
+            img_out.data_ptr<float>(),
+            save);
 
         // free cuda array for texture object
-        cudaDestroyTextureObject(imgs_in_tex);
-        cudaFreeArray(imgs_in_cu);
-        // for (auto& cu : weight_cus) {
-        //     cudaFreeArray(cu);
-        // }
-        for (int level = 0; level < L; level++) {
-            cudaDestroyTextureObject(kernel_texs[level]);
-            cudaFreeArray(kernel_cus[level]);
-        }
-
+        cudaDestroyTextureObject(img_in_tex);
+        cudaFreeArray(img_in_cu);
+       
+        // save context
         if (requires_grad) {
             ctx->save_for_backward(save);
         }
-        // std::cout << (uint64_t)imgs_out.data_ptr() << std::endl;
-        return imgs_out;
-    }
-
-    static void accumulate_one_level(
-        // clang-format off
-        torch::autograd::variable_list& save,
-        at::cuda::CUDAStream stream,
-        // clang-format on
-        const int           level,
-        const int           H,
-        const int           W,
-        const int           L,
-        cudaTextureObject_t imgs_in_tex,  // [H, W, 4]
-        cudaTextureObject_t kernel_tex,   // [H, W]
-        torch::Tensor       kernel_map,   // [H, W]
-        torch::Tensor       weight_map,   // [H, W]
-        torch::Tensor       imgs_out      // [H, W, 4]
-    ) {
-
-        // kernel size
-        const int support = level + 1;
-        // const int K       = 1 + (support << 1);
-        // const int K_SIZE  = K * K;
-
-        // use max pooling to find maximum value in the kernel
-        // std::cout << "kernel_map.sizes()"
-        //           << kernel_map.sizes() << std::endl;
-        // std::cout << "kernel_map.data_ptr()"
-        //           << (uint64_t)kernel_map.data_ptr<float>() << std::endl;
-        // std::cout << "kernel_map.unsqueeze(0)" << kernel_map.unsqueeze(0).sizes()
-        //           << std::endl;
-
-        // std::cout << "kernel_map.sizes()" << kernel_map.sizes() << std::endl;
-        // std::cout << "kernel_map.unsqueeze(0)"
-        //           << kernel_map.unsqueeze(0).sizes() << std::endl;
-        // std::cout << "kernel_map" << kernel_map << std::endl;
-
-        // kernel_map   = kernel_map.add(kernel_map);
-        // std::cout << "kernel_map.sizes()" << kernel_map.sizes() << std::endl;
-
-        // std::cout << "stream" << (uint64_t)stream.stream() << std::endl;
-        at::cuda::CUDAStreamGuard stream_guard(stream);
-        // namespace F  = torch::nn::functional;
-        // auto max_map = F::max_pool2d(
-        //     kernel_map.unsqueeze(0),  // [1, H, W]
-        //     F::MaxPool2dFuncOptions(K).padding(support).stride(1));
-        // max_map = max_map.squeeze(0);  // [H, W]
-        // std::cout << "max_map.sizes()" << max_map.sizes() << std::endl;
-        // auto max_map = torch::ones_like(kernel_map);
-
-        // tensors
-        bool need_save      = !save.empty();
-        auto rgb_filtered   = torch::Tensor();
-        auto max_map        = torch::Tensor();
-        auto inv_kernel_sum = torch::Tensor();
-        if (need_save) {
-            rgb_filtered   = torch::zeros_like(imgs_out);
-            max_map        = torch::zeros_like(kernel_map);
-            inv_kernel_sum = torch::zeros_like(kernel_map);
-        }
-
-        // apply kernel
-        KERNEL_APPLY(
-            stream.stream(),
-            support,
-            H,
-            W,
-            imgs_in_tex,
-            kernel_tex,
-            weight_map.data_ptr<float>(),
-            imgs_out.data_ptr<float>(),
-            (need_save ? rgb_filtered.data_ptr<float>() : nullptr),
-            (need_save ? max_map.data_ptr<float>() : nullptr),
-            (need_save ? inv_kernel_sum.data_ptr<float>() : nullptr));
-
-        // const int applying_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
-        // // clang-format off
-        // AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-        //     kernel_map.type(), "forward_applying", ([&] {
-        //         kernel::applying<scalar_t>
-        //             <<<applying_blocks, N_THREADS, 0, stream.stream()>>>(
-        //                 SIZE,
-        //                 H,
-        //                 W,
-        //                 support,
-        //                 kernel_map.data_ptr<scalar_t>(),
-        //                 imgs_in.data_ptr<scalar_t>(),
-        //                 max_map.data_ptr<scalar_t>(),
-        //                 rgb_sum.data_ptr<scalar_t>(),
-        //                 kernel_sum.data_ptr<scalar_t>());
-        //     }));
-        // // clang-format on
-
-
-
-        // // normalize & accumulate
-        // const int normalize_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
-        // // clang-format off
-        // AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-        //     kernel_map.type(), "forward_normalize", ([&] {
-        //         kernel::normalize<scalar_t>
-        //             <<<normalize_blocks, N_THREADS, 0, stream.stream()>>>(
-        //                 SIZE,
-        //                 weight_map.data_ptr<scalar_t>(),
-        //                 rgb_sum.data_ptr<scalar_t>(),
-        //                 kernel_sum.data_ptr<scalar_t>(),
-        //                 imgs_out.data_ptr<scalar_t>());
-        //     }));
-        // // clang-format on
-
-        // save tensors
-        if (need_save) {
-            int&& idx     = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
-            save[idx]     = rgb_filtered;
-            save[idx + 1] = max_map;
-            save[idx + 2] = inv_kernel_sum;
-        }
+        return img_out;
     }
 
     static torch::autograd::tensor_list backward(
         torch::autograd::AutogradContext* ctx,
-        torch::autograd::tensor_list      grad_outputs  
-    ) {
+        torch::autograd::tensor_list      grad_outputs) {
         auto saved       = ctx->get_saved_variables();
-        auto weight_map  = saved[0];  // [L, H, W]
-        auto kernel_map  = saved[1];  // [L, H, W]
-        auto imgs_in     = saved[2];  // [H, W, 4]
+        auto weight_map  = saved[0];                      // [L, H, W]
+        auto kernel_map  = saved[1];                      // [L, H, W]
+        auto img_in      = saved[2];                      // [H, W, 4]
         auto grad_output = grad_outputs[0].contiguous();  // [H, W, 4]
 
         // get dimensions
@@ -699,7 +632,7 @@ public:
                 W,
                 L,
                 grad_output,
-                imgs_in,
+                img_in,
                 saved[saved_idx],            // rgb_filtered
                 saved[saved_idx + 1],        // max_map
                 saved[saved_idx + 2],        // inv_kernel_sum
@@ -726,7 +659,7 @@ public:
         const int     W,
         const int     L,
         torch::Tensor grad_output,     // [H, W, 4]
-        torch::Tensor imgs_in,         // [H, W, 4]
+        torch::Tensor img_in,          // [H, W, 4]
         torch::Tensor rgb_filtered,    // [H, W, 4]
         torch::Tensor max_map,         // [H, W]
         torch::Tensor inv_kernel_sum,  // [H, W]
@@ -735,8 +668,6 @@ public:
         torch::Tensor grad_weight,     // [H, W]
         torch::Tensor grad_kernel      // [H, W]
     ) {
-        // std::cout << "grad_weight" << grad_weight << std::endl;
-
         // compute weight grads
         const int grad_weight_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
         // clang-format off
@@ -751,13 +682,6 @@ public:
                         grad_weight.data_ptr<scalar_t>());
             }));
         // clang-format on
-
-        // std::cout << "SIZE" << SIZE << std::endl;
-        // std::cout << "grad_output" << grad_output.is_contiguous() << grad_output
-        //           << std::endl;
-        // std::cout << "weight_map" << weight_map << std::endl;
-        // std::cout << "rgb_sum_map" << rgb_sum_map << std::endl;
-        // std::cout << "grad_weight" << grad_weight << std::endl;
 
         // kernel size
         const int support = level + 1;
@@ -777,7 +701,7 @@ public:
                         W,
                         support,
                         grad_output.data_ptr<scalar_t>(),
-                        imgs_in.data_ptr<scalar_t>(),
+                        img_in.data_ptr<scalar_t>(),
                         weight_map.data_ptr<scalar_t>(),
                         rgb_filtered.data_ptr<scalar_t>(),
                         kernel_map.data_ptr<scalar_t>(),
@@ -786,24 +710,32 @@ public:
                         grad_kernel.data_ptr<scalar_t>());
             }));
         // clang-format on
-
-        // std::cout << "grad_output" << grad_output << std::endl;
-        // std::cout << "weight_map" << weight_map << std::endl;
-        // std::cout << "rgb_sum_map" << rgb_sum_map << std::endl;
-        // std::cout << "kernel_map" << kernel_map << std::endl;
-        // std::cout << "max_map" << max_map << std::endl;
-        // std::cout << "kernel_sum" << max_map << std::endl;
-        // std::cout << "grad_kernel" << grad_kernel << std::endl;
     }
 };
 
-torch::Tensor filtering(
+void filtering(
+    cudaStream_t        stream,
+    torch::Tensor       weight_map,  // [L, H, W]
+    torch::Tensor       kernel_map,  // [L, H, W]
+    cudaTextureObject_t img_in,      // [H, W, 4]
+    cudaSurfaceObject_t img_out      // [H, W, 4]
+){
+    auto empty = torch::autograd::variable_list{};
+    host::forward<cudaSurfaceObject_t>(
+        stream,
+        weight_map,
+        kernel_map,
+        img_in,
+        img_out,
+        empty);
+}
+
+torch::Tensor filtering_autograd(
     torch::Tensor weight_map,  // [L, H, W]
     torch::Tensor kernel_map,  // [L, H, W]
-    torch::Tensor imgs_in,     // [H, W, 4]
+    torch::Tensor img_in,      // [H, W, 4]
     bool          requires_grad) {
-    return Filtering::apply(
-        weight_map, kernel_map, imgs_in, requires_grad);
+    return Filtering::apply(weight_map, kernel_map, img_in, requires_grad);
 }
 
 }  // namespace denoiser

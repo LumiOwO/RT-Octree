@@ -114,8 +114,6 @@ private:
         tex_desc.addressMode[0]   = cudaAddressModeWrap;
         tex_desc.addressMode[1]   = cudaAddressModeWrap;
         tex_desc.readMode         = cudaReadModeElementType;
-
-        cudaTextureObject_t texObj;
         cudaCreateTextureObject(&noisy_tex_obj, &res_desc, &tex_desc, nullptr);
     }
 };
