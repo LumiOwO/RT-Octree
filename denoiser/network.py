@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import os
 
-import torch_tensorrt
+# import torch_tensorrt
 
 try:
     import _denoiser
@@ -141,7 +141,7 @@ class GuidanceNet(nn.Module):
             weight_map = weight_map.squeeze(0) # [L, H, W]
             kernel_map = kernel_map.squeeze(0) # [L, H, W]
             img_in = img_in.squeeze(0) # [H, W, 4]
-            img_out = _denoiser.filtering(
+            img_out = _denoiser.filtering_autograd(
                 weight_map, kernel_map, img_in, requires_grad=requires_grad)
             return img_out.unsqueeze(0) # [B, H, W, 4]
 
@@ -150,7 +150,7 @@ class GuidanceNet(nn.Module):
         img_out = torch.zeros_like(img_in)
         for i in range(B):
             # with torch.cuda.stream(streams[i % 2]):
-            img_out[i] = _denoiser.filtering(
+            img_out[i] = _denoiser.filtering_autograd(
                 weight_map[i], kernel_map[i], img_in[i], requires_grad=requires_grad)
 
         # torch.cuda.synchronize()
@@ -248,19 +248,19 @@ def compact_and_compile(model: GuidanceNet, device=None):
     buffers_in = buffers_in.float()
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    trt_guidance_net_ts = torch_tensorrt.compile(
-        guidance_net_ts, 
-        inputs=[torch_tensorrt.Input(buffers_in.shape, dtype=torch.float16)],
-        enabled_precisions={torch.float16},
-    )
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-        with torch.no_grad():
-            buffers_in = buffers_in.half()
-            out1_trt, out2_trt = trt_guidance_net_ts(buffers_in)
-            buffers_in = buffers_in.float()
-    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+    # trt_guidance_net_ts = torch_tensorrt.compile(
+    #     guidance_net_ts, 
+    #     inputs=[torch_tensorrt.Input(buffers_in.shape, dtype=torch.float16)],
+    #     enabled_precisions={torch.float16},
+    # )
+    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+    #     with torch.no_grad():
+    #         buffers_in = buffers_in.half()
+    #         out1_trt, out2_trt = trt_guidance_net_ts(buffers_in)
+    #         buffers_in = buffers_in.float()
+    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    print((out1_trt - out1).max())
-    print((out2_trt - out2).max())
+    # print((out1_trt - out1).max())
+    # print((out2_trt - out2).max())
 
-    return trt_guidance_net_ts
+    # return trt_guidance_net_ts

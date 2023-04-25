@@ -1,9 +1,7 @@
 #include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
 #include <cuda_fp16.h>
 
 #include <ATen/cuda/Atomic.cuh>
-#include <ATen/native/cuda/KernelUtils.cuh>
 
 #include "filtering.h"
 

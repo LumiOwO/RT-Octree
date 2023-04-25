@@ -1,9 +1,9 @@
 logs_root = ./logs
-exp_name = drums
-data_dir = ./data/nerf_synthetic/drums
+exp_name = lego
+data_dir = ./data/nerf_synthetic/lego
 dataset_type = blender
 spp = 4
-use_wandb = true
+use_wandb = false
 
 lr = 0.0001
 epochs = 2000

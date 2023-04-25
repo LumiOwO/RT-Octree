@@ -47,14 +47,15 @@ class DenoiserDataset():
             tqdm.write(f"Loading {s} set...")
             for frame in tqdm(meta["frames"]):
                 name = os.path.basename(frame["file_path"])
-                rgba = imageio.imread(
-                    os.path.join(args.data_dir, f"spp_{args.spp}", s, "rgba_" + name + ".png"))
-                depth = imageio.imread(
-                    os.path.join(args.data_dir, f"spp_{args.spp}", s, "depth_" + name + ".png"))
+                # rgba = imageio.imread(
+                #     os.path.join(args.data_dir, f"spp_{args.spp}", s, "rgba_" + name + ".png"))
+                # depth = imageio.imread(
+                #     os.path.join(args.data_dir, f"spp_{args.spp}", s, "depth_" + name + ".png"))
                 img_in = imageio.imread(
                     os.path.join(args.data_dir, f"spp_{args.spp}", s, name + ".png"))
                 img_gt = imageio.imread(
                     os.path.join(args.data_dir, s, name + ".png"))
+                rgba = depth = img_in
 
                 buffers_in, img_in, img_gt = self.preprocess(rgba, depth, img_in, img_gt)
 
@@ -73,13 +74,18 @@ class DenoiserDataset():
             tqdm.write("Moving to cuda...")
             self.buffers_in[s] = torch.stack([
                 torch.from_numpy(x)[..., :args.in_channels].permute(2, 0, 1).contiguous() # [C, H, W]
-                for x in buffers_in_list]).to(device)
+                for x in buffers_in_list])
             self.imgs_in[s] = torch.stack([
                 torch.from_numpy(x) # [H, W, 4]
-                for x in imgs_in_list]).to(device)
+                for x in imgs_in_list])
             self.imgs_gt[s] = torch.stack([
                 torch.from_numpy(x) # [H, W, 4]
-                for x in imgs_gt_list]).to(device)
+                for x in imgs_gt_list])
+            
+            # if s == "train":
+            #     self.buffers_in[s] = self.buffers_in[s].to(device)
+            #     self.imgs_in[s] = self.imgs_in[s].to(device)
+            #     self.imgs_gt[s] = self.imgs_gt[s].to(device)
 
     def slice_imgs(self, buffers_in, img_gt):
         # slice into chunks

@@ -1,6 +1,6 @@
 #pragma once
 #include <cuda_runtime.h>
-#include <torch/torch.h>
+#include <torch/all.h>
 
 namespace denoiser {
 
