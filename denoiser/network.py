@@ -49,62 +49,82 @@ except ImportError:
     print("===== CUDA extension loaded.")
 
 class RepVGGBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, num_branches):
         super(RepVGGBlock, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        # self.conv5 = nn.Conv2d(in_channels, out_channels, 5, padding="same")
-        self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
-        self.conv3_2 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
-        self.conv3_3 = nn.Conv2d(in_channels, out_channels, 3, padding="same")
+        self.num_branches = num_branches
 
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
-        self.conv1_2 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
-        self.conv1_3 = nn.Conv2d(in_channels, out_channels, 1, padding="same")
+        conv3 = []
+        for _ in range(num_branches):
+            conv3.append(nn.Conv2d(in_channels, out_channels, 3, padding="same"))
+        self.conv3 = nn.ModuleList(conv3)
+
+        conv1 = []
+        for _ in range(num_branches):
+            conv1.append(nn.Conv2d(in_channels, out_channels, 1, padding="same"))
+        self.conv1 = nn.ModuleList(conv1)
 
     def forward(self, x):
-        # x5 = self.conv5(x)
-        # x3 = self.conv3(x)
-        # x3_2 = self.conv3_2(x)
-        # x1 = self.conv1(x)
-        # h = x3 + x1 + x3_2
-        h = self.conv3(x)
-        h += self.conv3_2(x)
-        h += self.conv3_3(x)
-
-        h += self.conv1(x)
-        h += self.conv1_2(x)
-        h += self.conv1_3(x)
+        h = self.conv3[self.num_branches - 1](x)
+        for i in range(self.num_branches - 1):
+            h += self.conv3[i](x)
+        for i in range(self.num_branches):
+            h += self.conv1[i](x)
 
         if self.in_channels == self.out_channels:
             h += x
         return F.relu6(h, inplace=True)
 
+def filtering(model, aux_buffer, img_in, requires_grad=False):
+    # aux_buffer [B, C, H, W]
+    weight_map, kernel_map = model(aux_buffer)
+
+    # kernel reconstruction and apply
+    B = img_in.shape[0]
+    if B == 1:
+        # filtering only support B == 1
+        weight_map = weight_map.squeeze(0) # [L, H, W]
+        kernel_map = kernel_map.squeeze(0) # [L, H, W]
+        img_in = img_in.squeeze(0) # [H, W, 4]
+        img_out = _denoiser.filtering_autograd(
+            weight_map, kernel_map, img_in, requires_grad=requires_grad)
+        return img_out.unsqueeze(0) # [B, H, W, 4]
+
+    # streams = [torch.cuda.Stream(), torch.cuda.Stream()]
+    # torch.cuda.synchronize()
+    img_out = torch.zeros_like(img_in)
+    for i in range(B):
+        # with torch.cuda.stream(streams[i % 2]):
+        img_out[i] = _denoiser.filtering_autograd(
+            weight_map[i], kernel_map[i], img_in[i], requires_grad=requires_grad)
+
+    # torch.cuda.synchronize()
+    return img_out
+
 class GuidanceNet(nn.Module):
-    def __init__(self, in_channels, mid_channels, num_layers, kernel_levels):
+    def __init__(self, in_channels, mid_channels, num_branches, num_layers, kernel_levels):
         super(GuidanceNet, self).__init__()
         self.in_channels = in_channels
         self.mid_channels = mid_channels
+        self.num_branches = num_branches
         self.num_layers = num_layers
         self.kernel_levels = kernel_levels
 
         layers = []
-        layers.append(RepVGGBlock(in_channels, mid_channels))
+        layers.append(RepVGGBlock(in_channels, mid_channels, num_branches))
         for _ in range(num_layers - 2):
-            layers.append(RepVGGBlock(mid_channels, mid_channels))
+            layers.append(RepVGGBlock(mid_channels, mid_channels, num_branches))
 
-        layers.append(RepVGGBlock(mid_channels, kernel_levels * 2))
+        layers.append(RepVGGBlock(mid_channels, kernel_levels * 2, num_branches))
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, buffers_in):
-        # buffers_in [B, C, H, W]
-        # imgs_in = buffers_in[..., :4]
-        # print(imgs_in.shape)
+    def forward(self, aux_buffer):
+        # aux_buffer [B, C, H, W]
 
         # kernel prediction
-        # x = buffers_in.permute(0, 3, 1, 2).contiguous() # [B, C, H, W]
-        x = buffers_in
         with torch.cuda.amp.autocast():
+            x = aux_buffer
             for layer in self.layers:
                 x = layer(x)
         x = x.float()
@@ -115,67 +135,32 @@ class GuidanceNet(nn.Module):
         kernel_map = x[:, self.kernel_levels:, ...].contiguous() # [B, L, H, W]
         return weight_map, kernel_map
 
-    def filtering(self, buffers_in, img_in, requires_grad=False):
-        # # buffers_in [B, C, H, W]
-        # # imgs_in = buffers_in[..., :4]
-        # B = img_in.shape[0]
-        # # print(imgs_in.shape)
-
-        # # kernel prediction
-        # # x = buffers_in.permute(0, 3, 1, 2).contiguous() # [B, C, H, W]
-        # x = buffers_in
-        # for layer in self.layers:
-        #     x = layer(x)
-
-        # weight_map = self.weight_layer(x) # [B, L, H, W]
-        # weight_map = F.softmax(weight_map, dim=1)
-
-        # kernel_map = self.kernel_layer(x) # [B, L, H, W]
-        weight_map, kernel_map = self.forward(buffers_in)
-
-        # kernel reconstruction and apply
-        B = img_in.shape[0]
-
-        if B == 1:
-            # filtering only support B == 1
-            weight_map = weight_map.squeeze(0) # [L, H, W]
-            kernel_map = kernel_map.squeeze(0) # [L, H, W]
-            img_in = img_in.squeeze(0) # [H, W, 4]
-            img_out = _denoiser.filtering_autograd(
-                weight_map, kernel_map, img_in, requires_grad=requires_grad)
-            return img_out.unsqueeze(0) # [B, H, W, 4]
-
-        # streams = [torch.cuda.Stream(), torch.cuda.Stream()]
-        # torch.cuda.synchronize()
-        img_out = torch.zeros_like(img_in)
-        for i in range(B):
-            # with torch.cuda.stream(streams[i % 2]):
-            img_out[i] = _denoiser.filtering_autograd(
-                weight_map[i], kernel_map[i], img_in[i], requires_grad=requires_grad)
-
-        # torch.cuda.synchronize()
-        return img_out
+    def filtering(self, aux_buffer, img_in, requires_grad=False):
+        return filtering(self, aux_buffer, img_in, requires_grad)
 
 class RepVGGBlockCompact(nn.Module):
     def __init__(self, full_model):
         super(RepVGGBlockCompact, self).__init__()
-        self.in_channels = full_model.in_channels
-        self.out_channels = full_model.out_channels
+        in_channels = full_model.in_channels
+        out_channels = full_model.out_channels
+        num_branches = full_model.num_branches
 
-        self.conv = nn.Conv2d(self.in_channels, self.out_channels, 3, padding="same")
+        self.conv = nn.Conv2d(in_channels, out_channels, 3, padding="same")
         weight = torch.zeros_like(self.conv.weight)
         bias = torch.zeros_like(self.conv.bias)
 
-        weight += full_model.conv3.weight
-        bias += full_model.conv3.bias
+        for i in range(num_branches):
+            weight += full_model.conv3[i].weight
+            bias += full_model.conv3[i].bias
 
-        weight += F.pad(full_model.conv1.weight, (1, 1, 1, 1))
-        bias += full_model.conv1.bias
+        for i in range(num_branches):
+            weight += F.pad(full_model.conv1[i].weight, (1, 1, 1, 1))
+            bias += full_model.conv1[i].bias
 
-        if self.in_channels == self.out_channels:
+        if in_channels == out_channels:
             weight_identity = torch.zeros_like(self.conv.weight)
-            for i in range(self.out_channels):
-                weight_identity[i, i % self.in_channels, 1, 1] = 1
+            for i in range(out_channels):
+                weight_identity[i, i % in_channels, 1, 1] = 1
             weight += weight_identity
 
         self.conv.weight = nn.Parameter(weight)
@@ -191,6 +176,7 @@ class GuidanceNetCompact(GuidanceNet):
         super(GuidanceNet, self).__init__()
         self.in_channels = full_model.in_channels
         self.mid_channels = full_model.mid_channels
+        self.num_branches = full_model.num_branches
         self.num_layers = full_model.num_layers
         self.kernel_levels = full_model.kernel_levels
 
@@ -201,66 +187,67 @@ class GuidanceNetCompact(GuidanceNet):
 
 def compact_and_compile(model: GuidanceNet, device=None):
     # Compact
-    model = GuidanceNet(
-        model.in_channels, model.mid_channels, model.num_layers, model.kernel_levels)
-    compact = GuidanceNetCompact(model)
-    model = model.half()
-    compact = compact.half()
-    compact = compact.eval()
+    model = model.eval().cpu()
+    compact = GuidanceNetCompact(model).eval()
 
-    # Check compact correctness
-    B, C, H, W = 1, 4, 800, 800
     model = model.to(device)
     compact = compact.to(device)
-    buffers_in = torch.rand((B, C, H, W)).to(device)
-    img_in = torch.rand((B, H, W, 4)).to(device)
+
+    # Check compact correctness
+    B, C, H, W = 1, 8, 800, 800
+    aux_buffer = torch.rand((B, C, H, W)).to(device)
+    # img_in = torch.rand((B, H, W, 4)).to(device)
     # with torch.no_grad():
-    #     out1 = model(buffers_in, img_in)
-    #     out2 = compact(buffers_in, img_in)
-    #     print((out2 - out1).max())
-    #     assert ((out1 - out2).abs() < 1e-4).all(), "Compact check failed."
+    #     a1, a2 = model(aux_buffer)
+    #     b1, b2 = compact(aux_buffer)
+    #     print((a1 - b1).abs().max())
+    #     print((a1 - b1).abs().mean())
+    #     print(torch.sqrt(torch.sum((a1 - b1) ** 2)))
+    #     assert ((a1 - b1).abs() < 1e-2).all(), "Compact check failed."
+    #     print((a2 - b2).abs().max())
+    #     print((a2 - b2).abs().mean())
+    #     print(torch.sqrt(torch.sum((a2 - b2) ** 2)))
+    #     assert ((a2 - b2).abs() < 1e-2).all(), "Compact check failed."
 
-    # buffers_in = buffers_in.half()
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-        with torch.no_grad():
-            # buffers_in = buffers_in.half()
-            out1, out2 = model.forward(buffers_in)
-            # buffers_in = buffers_in.float()
-    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+    # # aux_buffer = aux_buffer.half()
+    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+    #     with torch.no_grad():
+    #         # aux_buffer = aux_buffer.half()
+    #         out1, out2 = model.forward(aux_buffer)
+    #         # aux_buffer = aux_buffer.float()
+    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-        with torch.no_grad():
-            # buffers_in = buffers_in.half()
-            out1, out2 = compact.forward(buffers_in)
-            # buffers_in = buffers_in.float()
-    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+    #     with torch.no_grad():
+    #         # aux_buffer = aux_buffer.half()
+    #         out1, out2 = compact.forward(aux_buffer)
+    #         # aux_buffer = aux_buffer.float()
+    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    buffers_in = buffers_in.half()
     # compact_script = torch.jit.script(compact)
-    with torch.no_grad():
-        guidance_net_ts = torch.jit.trace(compact.forward, (buffers_in))
-    buffers_in = buffers_in.float()
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-        with torch.no_grad():
-            buffers_in = buffers_in.half()
-            out1, out2 = guidance_net_ts(buffers_in)
-    print(out1.dtype)
-    buffers_in = buffers_in.float()
-    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+    with torch.no_grad(), torch.cuda.amp.autocast():
+        guidance_net_ts = torch.jit.trace(compact.forward, (aux_buffer))
+    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+    #     with torch.no_grad():
+    #         aux_buffer = aux_buffer.half()
+    #         out1, out2 = guidance_net_ts(aux_buffer)
+    # print(out1.dtype)
+    # aux_buffer = aux_buffer.float()
+    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     # trt_guidance_net_ts = torch_tensorrt.compile(
     #     guidance_net_ts, 
-    #     inputs=[torch_tensorrt.Input(buffers_in.shape, dtype=torch.float16)],
+    #     inputs=[torch_tensorrt.Input(aux_buffer.shape, dtype=torch.float16)],
     #     enabled_precisions={torch.float16},
     # )
     # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
     #     with torch.no_grad():
-    #         buffers_in = buffers_in.half()
-    #         out1_trt, out2_trt = trt_guidance_net_ts(buffers_in)
-    #         buffers_in = buffers_in.float()
+    #         aux_buffer = aux_buffer.half()
+    #         out1_trt, out2_trt = trt_guidance_net_ts(aux_buffer)
+    #         aux_buffer = aux_buffer.float()
     # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     # print((out1_trt - out1).max())
     # print((out2_trt - out2).max())
 
-    # return trt_guidance_net_ts
+    return guidance_net_ts

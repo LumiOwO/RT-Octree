@@ -4,7 +4,7 @@ import gc
 
 from tqdm import tqdm, trange
 from denoiser.utils import load_checkpoint
-from denoiser.network import compact_and_compile
+from denoiser.network import compact_and_compile, filtering
 from denoiser.metrics import get_loss_fn
 from denoiser.metrics import PSNRMetric, SSIMMetric, LPIPSMetric
 
@@ -69,14 +69,14 @@ class Runner(object):
 
         # test after training
         self.logger.print("Test after training")
-        self.test(model, False)
+        self.test(model, load_ckpt=False)
 
     def train_one_epoch(self, model, dataloader, optimizer, lr_scheduler, scaler):
         avg_loss = 0
-        for batch_idx, (buffers_in, img_in, img_gt) in enumerate(dataloader):
+        for batch_idx, (aux_buffer, img_in, img_gt) in enumerate(dataloader):
             optimizer.zero_grad(set_to_none=True)
 
-            img_out = model.filtering(buffers_in, img_in, requires_grad=True)
+            img_out = model.filtering(aux_buffer, img_in, requires_grad=True)
 
             loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
             # loss.backward()
@@ -96,8 +96,12 @@ class Runner(object):
                 "train/lr": optimizer.param_groups[0]["lr"],
             })
 
-        # save checkpoint
+        # save
         if self.epoch % self.args.i_save == 0:
+            # save torchscript model
+            self.compact(model, load_ckpt=False, filename=f"ts_{self.epoch:06d}.ts")
+            
+            # save checkpoint
             path = os.path.join(self.args.work_dir, f"checkpoint_{self.epoch:06d}.tar")
             torch.save({
                 "epoch": self.epoch + 1,
@@ -106,6 +110,7 @@ class Runner(object):
                 "lr_scheduler": lr_scheduler.state_dict(),
             }, path)
             self.logger.print(f"Save checkpoint at {path}")
+
 
     def test(self, model, load_ckpt=True, save_dirname="test"):
         # init
@@ -120,41 +125,71 @@ class Runner(object):
 
         with torch.no_grad():
             self.test_one_epoch(model, dataloader, save_dirname)
-
+        
     def test_one_epoch(self, model, dataloader, save_dirname):
         # batch_size == 1 when testing
         save_dir = os.path.join(self.args.work_dir, save_dirname)
         os.makedirs(save_dir, exist_ok=True)
 
+        # Test full model
         for m in self.metrics:
             m.reset()
         avg_loss = 0
-        for batch_idx, (buffers_in, img_in, img_gt) in enumerate(tqdm(dataloader)):
+        for batch_idx, (aux_buffer, img_in, img_gt) in enumerate(tqdm(dataloader)):
             # B == 1 in test
-            img_out = model.filtering(buffers_in, img_in)
+            img_out = model.filtering(aux_buffer, img_in)
 
             loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
             avg_loss += loss.item()
             for m in self.metrics:
                 m.measure(img_out[..., :3], img_gt[..., :3])
 
+        avg_loss = avg_loss / len(dataloader)
+        full_model_log = {
+            "test/loss": avg_loss,
+            **{f"test/{m.name()}": m.result() for m in self.metrics}
+        }
+
+        # Test compact model
+        ts_module = self.compact(model, load_ckpt=False, filename="")
+        for m in self.metrics:
+            m.reset()
+        avg_loss = 0
+        for batch_idx, (aux_buffer, img_in, img_gt) in enumerate(tqdm(dataloader)):
+            # B == 1 in test
+            img_out = filtering(ts_module, aux_buffer, img_in)
+
+            loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
+            avg_loss += loss.item()
+            for m in self.metrics:
+                m.measure(img_out[..., :3], img_gt[..., :3])
+            
             img_out[..., -1:] = 1
             self.logger.log_image(img_out, save_dir, "r", batch_idx, {"epoch": self.epoch})
 
         avg_loss = avg_loss / len(dataloader)
+        compact_model_log = {
+            "test/loss_compact": avg_loss,
+            **{f"test/{m.name()}_compact": m.result() for m in self.metrics}
+        }
+
         self.logger.log({
             "epoch": self.epoch,
-            "test/loss": avg_loss,
-            **{f"test/{m.name()}": m.result() for m in self.metrics}
+            **full_model_log,
+            **compact_model_log,
         })
 
-    def compact(self, model):
-        # ckpt, ckpt_path = load_checkpoint(self.args.work_dir)
-        # if ckpt is None:
-        #     self.logger.print("No checkpoint found.")
-        #     return
-        # self.logger.print(f"Load checkpoint from {ckpt_path}")
-        # model.load_state_dict(ckpt['model'])
-        trt_ts_module = compact_and_compile(model, self.device)
-        torch.jit.save(trt_ts_module, 
-            os.path.join(self.args.work_dir, "trt_latest.ts"))
+    def compact(self, model, load_ckpt=True, filename="ts_latest.ts"):
+        if load_ckpt:
+            ckpt, ckpt_path = load_checkpoint(self.args.work_dir)
+            if ckpt is None:
+                self.logger.print("No checkpoint found.")
+                return
+            self.logger.print(f"Load checkpoint from {ckpt_path}")
+            model.load_state_dict(ckpt['model'])
+
+        ts_module = compact_and_compile(model, self.device)
+        if filename:
+            torch.jit.save(ts_module, 
+                os.path.join(self.args.work_dir, filename))
+        return ts_module

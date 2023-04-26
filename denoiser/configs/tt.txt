@@ -1,19 +1,23 @@
 logs_root = ./logs
 exp_name = Barn
 data_dir = ./data/plenoctree/Barn
+
 dataset_type = tt
 spp = 4
-use_wandb = true
+preload = false
 
-lr = 0.0001
-epochs = 2000
-batch_size = 1
+use_wandb = true
 i_print = 1
 i_save = 100
 i_test = 100
 
+lr = 0.0001
+epochs = 2000
+batch_size = 1
+
 in_channels = 8
 mid_channels = 32
 num_layers = 3
+num_branches = 3
 kernel_levels = 6
 loss_fn = smape

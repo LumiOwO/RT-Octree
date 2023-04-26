@@ -127,6 +127,8 @@ int main(int argc, char *argv[])
                 cxxopts::value<int>()->default_value("0"))
         ("dataset", "dataset type",
                 cxxopts::value<std::string>()->default_value("blender"))
+        ("write_buffer", "save auxiliary buffers. Invalid if output directory is not given.",
+                cxxopts::value<bool>())
         ;
     // clang-format on
 
@@ -323,11 +325,11 @@ int main(int argc, char *argv[])
             denoiser.denoise(camera, ctx, stream);
         }
 
-
         if (!out_dir.size()) {
             continue;
         }
-
+        
+        // write image
         {
             cuda(Memcpy2DFromArray(
                 buf.data(),
@@ -339,27 +341,25 @@ int main(int argc, char *argv[])
                 height,
                 cudaMemcpyDeviceToHost));
             auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-            for (int j = 0; j < buf.size(); j++) {
+            for (int j = 0; j < buf_uint8.size(); j++) {
                 buf_uint8[j] = buf[j] * 255;
             }
             std::string fpath = out_dir + "/" + basenames[i] + ".png";
             internal::write_png_file(fpath, buf_uint8.data(), width, height);
         }
-        {
+        
+        // write auxiliary buffer
+        if (args["write_buffer"].as<bool>()) {
+            const size_t SIZE =
+                sizeof(float) * RenderContext::CHANNELS * width * height;
             cuda(Memcpy(
-                buf.data(),
-                ctx.aux_buffer,
-                sizeof(float) * RenderContext::CHANNELS * width * height,
-                cudaMemcpyDeviceToHost));
-            auto buf_uint8 = std::vector<uint8_t>(4 * width * height);
-            for (int j = 0; j < width * height; j++) {
-                buf_uint8[j * 4]     = buf[j * 8] * 255;
-                buf_uint8[j * 4 + 1] = buf[j * 8 + 1] * 255;
-                buf_uint8[j * 4 + 2] = buf[j * 8 + 2] * 255;
-                buf_uint8[j * 4 + 3] = buf[j * 8 + 3] * 255;
-            }
-            std::string fpath = out_dir + "/rgba_" + basenames[i] + ".png";
-            internal::write_png_file(fpath, buf_uint8.data(), width, height);
+                buf.data(), ctx.aux_buffer, SIZE, cudaMemcpyDeviceToHost));
+
+            auto outfile = std::ofstream(
+                out_dir + "/buf_" + basenames[i] + ".bin",
+                std::ios::out | std::ios::binary);
+            outfile.write((char *)buf.data(), SIZE);
+            outfile.close();
         }
     }
     cudaEventRecord(stop);

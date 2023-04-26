@@ -4,7 +4,7 @@ import os
 
 from denoiser.utils import seed_everything
 from denoiser.runner import Runner
-from denoiser.dataset import DenoiserDataset, TanksAndTemplesDataset
+from denoiser.dataset import BlenderDataset, TanksAndTemplesDataset
 
 from denoiser.logger.base_logger import BaseLogger
 from denoiser.logger.wandb_logger import WandbLogger
@@ -27,7 +27,12 @@ def main(args):
 
     # Create model
     model = GuidanceNet(
-        args.in_channels, args.mid_channels, args.num_layers, args.kernel_levels)
+        args.in_channels, 
+        args.mid_channels, 
+        args.num_branches, 
+        args.num_layers, 
+        args.kernel_levels
+        )
     if args.task == "compact":
         runner = Runner(args, logger=logger, device=device)
         runner.compact(model)
@@ -36,7 +41,7 @@ def main(args):
 
     # Load data
     if args.dataset_type == "blender":
-        dataset = DenoiserDataset(args, device=device)
+        dataset = BlenderDataset(args, device=device)
     elif args.dataset_type == "tt":
         dataset = TanksAndTemplesDataset(args, device=device)
     else:
@@ -65,12 +70,16 @@ if __name__ == "__main__":
                         help="experiment name")
     parser.add_argument("--data_dir", type=str, default="../data/nerf_synthetic/lego", 
                         help="input data directory")
-    parser.add_argument("--spp", type=int, default=1, 
-                        help="use which spp noisy input")
+
+    # dataset options
     parser.add_argument("--dataset_type", type=str, default="blender", 
                         help="options: llff / blender / tt")
+    parser.add_argument("--spp", type=int, default=1, 
+                        help="use which spp noisy input")
+    parser.add_argument("--preload", action="store_true", 
+                        help="preload dataset to cuda")
 
-    # logging/saving options
+    # logging options
     parser.add_argument("--use_wandb", action="store_true",  
                         help="frequency of console printout and metric loggin")
     parser.add_argument("--i_print",   type=int, default=100, 
@@ -86,6 +95,8 @@ if __name__ == "__main__":
     parser.add_argument("--mid_channels", type=int, default=8, 
     help="layers in network")
     parser.add_argument("--num_layers", type=int, default=8, 
+    help="layers in network")
+    parser.add_argument("--num_branches", type=int, default=3, 
     help="layers in network")
     parser.add_argument("--kernel_levels", type=int, default=8, 
     help="layers in network")
