@@ -617,7 +617,11 @@ void glfw_mouse_button_callback(GLFWwindow* window, int button, int action,
 }
 
 void glfw_cursor_pos_callback(GLFWwindow* window, double x, double y) {
-    GET_RENDERER(window).camera.drag_update(x, y);
+    auto& renderer = GET_RENDERER(window);
+    if (renderer.camera.is_dragging()) {
+        renderer.camera.drag_update(x, y);
+        renderer.update_rng();
+    }
 }
 
 void glfw_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
@@ -720,6 +724,8 @@ int main(int argc, char* argv[]) {
         ("grid", "show grid with given max resolution (4 is reasonable)", cxxopts::value<int>())
         ("probe", "enable lumisphere_probe and place it at given x,y,z",
                    cxxopts::value<std::vector<float>>())
+        ("ts_module", "path to torchscript module",
+                cxxopts::value<std::string>()->default_value(""))
         ;
     // clang-format on
 
@@ -786,6 +792,8 @@ int main(int argc, char* argv[]) {
                 rend.meshes = Mesh::open_drawlist(drawlist_load_path);
             }
         }
+
+        rend.create_denoiser(args["ts_module"].as<std::string>());
 
         glfwGetFramebufferSize(window, &width, &height);
         rend.set(tree);

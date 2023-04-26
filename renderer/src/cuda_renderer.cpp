@@ -9,6 +9,7 @@
 #include <GL/glew.h>
 #include <cuda_gl_interop.h>
 #include <array>
+#include <memory>
 
 #include "volrend/cuda/common.cuh"
 #include "volrend/cuda/renderer_kernel.hpp"
@@ -122,7 +123,7 @@ struct VolumeRenderer::Impl {
 
             launch_renderer(*tree, camera, options, ctx[buf_index], stream);
             if (options.denoise) {
-                denoiser.denoise(camera, ctx[buf_index], stream);
+                denoiser->denoise(camera, ctx[buf_index], stream);
             }
 
             cuda(GraphicsUnmapResources(2, &cgr[buf_index * 2], stream));
@@ -201,6 +202,16 @@ struct VolumeRenderer::Impl {
         }
     }
 
+    void create_denoiser(const std::string& ts_module_path) { 
+        denoiser = std::make_unique<Denoiser>(ts_module_path);
+    }
+
+    void update_rng() {
+        for (int i = 0; i < 2; i++) {
+            ctx[i].rng.advance();
+        }
+    }
+
     const N3Tree* tree = nullptr;
 
    private:
@@ -225,7 +236,7 @@ struct VolumeRenderer::Impl {
 
     // Render contexts
     std::array<RenderContext, 2> ctx;
-    Denoiser denoiser;
+    std::unique_ptr<Denoiser> denoiser;
 };
 
 VolumeRenderer::VolumeRenderer()
@@ -241,6 +252,12 @@ void VolumeRenderer::resize(int width, int height) {
     impl_->resize(width, height);
 }
 const char* VolumeRenderer::get_backend() { return "CUDA"; }
+
+void VolumeRenderer::create_denoiser(const std::string& ts_module_path) {
+    impl_->create_denoiser(ts_module_path);
+}
+
+void VolumeRenderer::update_rng() { impl_->update_rng(); }
 
 }  // namespace volrend
 #endif

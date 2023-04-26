@@ -24,6 +24,12 @@ struct VolumeRenderer {
     // Resize the buffer
     void resize(int width, int height);
 
+    // Create denoiser
+    void create_denoiser(const std::string& ts_module_path);
+
+    // Update random number generator
+    void update_rng();
+
     // Get name identifying the renderer backend used e.g. CUDA
     const char* get_backend();
 

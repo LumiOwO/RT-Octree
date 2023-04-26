@@ -464,7 +464,7 @@ __host__ void accumulate_one_level(
     auto inv_kernel_sum = torch::Tensor();
     if (need_save) {
         rgb_filtered = torch::zeros(
-            {weight_map.sizes()[0], weight_map.sizes()[1], 4},
+            {weight_map.size(0), weight_map.size(1), 4},
             torch::TensorOptions()
                 .device(weight_map.device())
                 .dtype(weight_map.dtype()));

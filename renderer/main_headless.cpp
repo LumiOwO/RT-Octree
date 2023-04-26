@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <memory>
 #include <vector>
 
 #if __has_include(<filesystem>)
@@ -127,7 +128,10 @@ int main(int argc, char *argv[])
                 cxxopts::value<int>()->default_value("0"))
         ("dataset", "dataset type",
                 cxxopts::value<std::string>()->default_value("blender"))
-        ("write_buffer", "save auxiliary buffers. Invalid if output directory is not given.",
+        ("ts_module", "path to torchscript module",
+                cxxopts::value<std::string>()->default_value(""))
+        ("write_buffer", "save auxiliary buffers. "
+         "Invalid if output directory is not given.",
                 cxxopts::value<bool>())
         ;
     // clang-format on
@@ -284,7 +288,8 @@ int main(int argc, char *argv[])
 
     // Create denoiser
     // std::cout << Denoiser::test() << std::endl;
-    Denoiser denoiser;
+    std::unique_ptr<Denoiser> denoiser =
+        std::make_unique<Denoiser>(args["ts_module"].as<std::string>());
 
     // Load render options
     RenderOptions options;
@@ -309,8 +314,10 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 100; i++) {
         launch_renderer(tree, camera, options, ctx, stream, true);
         if (options.denoise) {
-            denoiser.denoise(camera, ctx, stream);
+            denoiser->denoise(camera, ctx, stream);
         }
+        // update rng
+        ctx.rng.advance();
     }
 
     // Begin render
@@ -322,8 +329,10 @@ int main(int argc, char *argv[])
 
         launch_renderer(tree, camera, options, ctx, stream, true);
         if (options.denoise) {
-            denoiser.denoise(camera, ctx, stream);
+            denoiser->denoise(camera, ctx, stream);
         }
+        // update rng
+        ctx.rng.advance();
 
         if (!out_dir.size()) {
             continue;

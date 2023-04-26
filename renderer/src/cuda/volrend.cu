@@ -473,9 +473,6 @@ __host__ void launch_renderer(
                 "spp == " + std::to_string(options.spp) + " not supported.");
     }
 
-    // update rng
-    ctx.rng.advance();
-    
     if (options.enable_probe) {
         cudaFree(probe_coeffs);
     }
