@@ -110,7 +110,7 @@ __global__ void applying(
     const int           H,
     const int           W,
     cudaTextureObject_t img_in_tex,        // [H, W, 4]
-    cudaTextureObject_t kernel_tex,        // [H, W, 4]
+    const float* __restrict__ kernel_map,  // [H, W]
     const float* __restrict__ weight_map,  // [H, W]
     OutputType img_out,                    // [H, W, 4]
     float* __restrict__ rgb_filtered,      // [H, W, 4]
@@ -140,8 +140,7 @@ __global__ void applying(
         if (_iy >= 0 && _iy < H && _ix >= 0 && _ix < W) {          \
             rgba_tile[_ty][_tx] =                                  \
                 tex2D<float4>(img_in_tex, _ix + 0.5f, _iy + 0.5f); \
-            kernel_tile[_ty][_tx] =                                \
-                tex2D<float>(kernel_tex, _ix + 0.5f, _iy + 0.5f);  \
+            kernel_tile[_ty][_tx] = kernel_map[IMAD(_iy, W, _ix)]; \
         } else {                                                   \
             rgba_tile[_ty][_tx]   = float4{0, 0, 0, 0};            \
             kernel_tile[_ty][_tx] = -FLT_MAX;                      \
@@ -345,7 +344,7 @@ __host__ inline void kernel_apply(
     const int           H,
     const int           W,
     cudaTextureObject_t img_in_tex,     // [H, W, 4]
-    cudaTextureObject_t kernel_tex,     // [H, W, 4]
+    const float*        kernel_map,     // [H, W]
     const float*        weight_map,     // [H, W]
     OutputType          img_out,        // [H, W, 4]
     float*              rgb_filtered,   // [H, W, 4]
@@ -366,7 +365,7 @@ __host__ inline void kernel_apply(
     grid_size.z = 1;
 
 #define __ARGS_TEMP__                                                         \
-    H, W, img_in_tex, kernel_tex, weight_map, img_out, rgb_filtered, max_map, \
+    H, W, img_in_tex, kernel_map, weight_map, img_out, rgb_filtered, max_map, \
         inv_kernel_sum
 
     switch (support) {
@@ -400,7 +399,6 @@ __host__ inline void kernel_apply(
                 " not supported.");
     }
 #undef __ARGS_TEMP__
-
 }
 
 template <typename float_n>
@@ -446,7 +444,7 @@ __host__ void accumulate_one_level(
     const int           W,
     const int           L,
     cudaTextureObject_t img_in_tex,  // [H, W, 4]
-    cudaTextureObject_t kernel_tex,  // [H, W]
+    torch::Tensor       kernel_map,  // [H, W]
     torch::Tensor       weight_map,  // [H, W]
     OutputType          img_out,     // [H, W, 4]
 
@@ -479,7 +477,7 @@ __host__ void accumulate_one_level(
         H,
         W,
         img_in_tex,
-        kernel_tex,
+        kernel_map.data_ptr<float>(),
         weight_map.data_ptr<float>(),
         img_out,
         (need_save ? rgb_filtered.data_ptr<float>() : nullptr),
@@ -511,17 +509,6 @@ __host__ void forward(
     const int H       = kernel_map.size(1);
     const int W       = kernel_map.size(2);
 
-    // create kernel texture
-    auto kernel_cus  = std::vector<cudaArray_t>{};
-    auto kernel_texs = std::vector<cudaTextureObject_t>{};
-    for (int level = 0; level < L; level++) {
-        cudaArray_t         kernel_cu;
-        cudaTextureObject_t kernel_tex = create_texture_from_tensor<float>(
-            kernel_cu, H, W, kernel_map.index({level}));
-        kernel_cus.emplace_back(kernel_cu);
-        kernel_texs.emplace_back(kernel_tex);
-    }
-
     for (int level = 0; level < L; level++) {
         accumulate_one_level<OutputType>(
             stream,
@@ -530,16 +517,12 @@ __host__ void forward(
             W,
             L,
             img_in_tex,
-            kernel_texs[level],
+            kernel_map.index({level}),
             weight_map.index({level}),
             img_out,
             save);
     }
 
-    for (int level = 0; level < L; level++) {
-        cudaDestroyTextureObject(kernel_texs[level]);
-        cudaFreeArray(kernel_cus[level]);
-    }
 }
 };  // namespace host
 
