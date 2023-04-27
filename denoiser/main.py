@@ -78,6 +78,10 @@ if __name__ == "__main__":
                         help="use which spp noisy input")
     parser.add_argument("--preload", action="store_true", 
                         help="preload dataset to cuda")
+    parser.add_argument("--nx", type=int, default=1, 
+                        help="slice x")
+    parser.add_argument("--ny", type=int, default=1, 
+                        help="slice y")
 
     # logging options
     parser.add_argument("--use_wandb", action="store_true",  

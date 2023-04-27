@@ -53,35 +53,7 @@ class DenoiserDataset():
 
     def load_images(self, args):
         raise NotImplementedError()
-
-    def slice_imgs(self, aux_buffer, img_gt):
-        # slice into chunks
-        n = 80
-        tolerance = 0.8
-
-        def valid_chunk(img_gt_chunk):
-            if img_gt.shape[-1] == 4:
-                alpha = img_gt_chunk[..., -1]
-                percentage = np.sum(alpha == 0) / alpha.size
-            else:
-                rgb = img_gt_chunk[..., :3]
-                percentage = np.sum(rgb == [1, 1, 1]) / rgb.size
-            # print(percentage)
-            return percentage < tolerance
-        aux_buffer_chunks = []
-        img_gt_chunks = []
-        for i in range(0, aux_buffer.shape[0], n):
-            for j in range(0, aux_buffer.shape[1], n):
-                img_gt_chunk = img_gt[i:i+n, j:j+n]
-                if not valid_chunk(img_gt_chunk):
-                    continue
-                aux_buffer_chunk = aux_buffer[i:i+n, j:j+n]
-
-                img_gt_chunks.append(img_gt_chunk)
-                aux_buffer_chunks.append(aux_buffer_chunk)
-
-        return aux_buffer_chunks, img_gt_chunks
-
+    
     def preprocess(self, aux_buffer, img_gt):
         # aux_buffer: [C, H, W]
         # img_gt: [H, W, 3/4]
@@ -97,26 +69,64 @@ class DenoiserDataset():
             alpha = img_gt[..., -1:]
             img_gt[..., :3] = img_gt[..., :3] * alpha + 1 * (1 - alpha)
 
+        return aux_buffer, img_in, img_gt
+
+    def slice_imgs(self, nx, ny, aux_buffer, img_in, img_gt):
+        # aux_buffer [C, H, W]
+        # img_in [H, W, 4]
+        # img_gt [H, W, 3/4]
+        aux_buffer_chunks = []
+        img_in_chunks = []
+        img_gt_chunks = []
+
+        def valid_chunk(img_gt_chunk):
+            tolerance = 0.8
+            if img_gt.shape[-1] == 4:
+                alpha = img_gt_chunk[..., -1]
+                percentage = np.sum(alpha == 0) / alpha.size
+            else:
+                rgb = img_gt_chunk[..., :3]
+                percentage = np.sum(rgb == [1, 1, 1]) / rgb.size
+            # print(percentage)
+            return percentage < tolerance
+
+        # slice into chunks
+        H = aux_buffer.shape[1]
+        W = aux_buffer.shape[2]
+        dh = H // ny
+        dw = W // nx
+        for h in range(0, H, dh):
+            for w in range(0, W, dw):
+                img_gt_chunk = img_gt[h:h+dh, w:w+dw]
+                if not valid_chunk(img_gt_chunk):
+                    continue
+                aux_buffer_chunk = aux_buffer[..., h:h+dh, w:w+dw]
+                img_in_chunk = img_in[h:h+dh, w:w+dw]
+
+                img_gt_chunks.append(img_gt_chunk)
+                img_in_chunks.append(img_in_chunk)
+                aux_buffer_chunks.append(aux_buffer_chunk)
+
         if False:
-            temp1 = torch.stack([torch.from_numpy(x) for x in [img_in]])
-            print(temp1.shape)
-            torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), 
-                os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
-            temp2 = torch.stack([torch.from_numpy(x) for x in [img_gt]])
+            # temp1 = torch.stack([torch.from_numpy(x) for x in [img_in]])
+            # print(temp1.shape)
+            # torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), 
+            #     os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
+            temp2 = torch.stack([torch.from_numpy(x) for x in img_gt_chunks])
             print(temp2.shape)
             torchvision.utils.save_image(temp2.permute(0, 3, 1, 2), 
                 os.path.join(self.args.work_dir, "temp2.png"), nrow=10)
-            temp3 = torch.stack([torch.from_numpy(x) for x in [aux_buffer[:4, ...]]])
+            temp3 = torch.stack([torch.from_numpy(x[:4, ...]) for x in aux_buffer_chunks])
             print(temp3.shape)
             torchvision.utils.save_image(temp3, 
                 os.path.join(self.args.work_dir, "temp3.png"), nrow=10)
-            temp4 = torch.stack([torch.from_numpy(x) for x in [aux_buffer[4:, ...]]])
+            temp4 = torch.stack([torch.from_numpy(x) for x in img_in_chunks])
             print(temp4.shape)
-            torchvision.utils.save_image(temp4, 
+            torchvision.utils.save_image(temp4.permute(0, 3, 1, 2), 
                 os.path.join(self.args.work_dir, "temp4.png"), nrow=10)
             exit(1)
 
-        return aux_buffer, img_in, img_gt
+        return aux_buffer_chunks, img_in_chunks, img_gt_chunks
 
     def dataloader(self, task):
         dataset = DenoiserDatasetSplit(
@@ -159,9 +169,9 @@ class BlenderDataset(DenoiserDataset):
 
                 aux_buffer, img_in, img_gt = self.preprocess(aux_buffer, img_gt)
 
-                # if s == "train":
-                if False:
-                    aux_buffer, img_gt = self.slice_imgs(aux_buffer, img_gt)
+                if s == "train":
+                    aux_buffer, img_in, img_gt = self.slice_imgs(
+                            args.nx, args.ny, aux_buffer, img_in, img_gt)
                 else:
                     aux_buffer = [aux_buffer]
                     img_in = [img_in]
@@ -212,9 +222,9 @@ class TanksAndTemplesDataset(DenoiserDataset):
 
                 aux_buffer, img_in, img_gt = self.preprocess(aux_buffer, img_gt)
 
-                # if s == "train":
-                if False:
-                    aux_buffer, img_gt = self.slice_imgs(aux_buffer, img_gt)
+                if s == "train":
+                    aux_buffer, img_in, img_gt = self.slice_imgs(
+                        args.nx, args.ny, aux_buffer, img_in, img_gt)
                 else:
                     aux_buffer = [aux_buffer]
                     img_in = [img_in]

@@ -5,6 +5,8 @@ data_dir = ./data/plenoctree/Barn
 dataset_type = tt
 spp = 4
 preload = false
+nx = 10
+ny = 10
 
 use_wandb = true
 i_print = 1

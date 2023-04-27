@@ -405,20 +405,10 @@ template <typename float_n>
 __host__ cudaTextureObject_t create_texture_from_tensor(
     cudaArray_t&  cuArray,
     int           H,
-    int           W,
-    torch::Tensor tensor) {
+    int           W) {
 
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float_n>();
     cudaMallocArray(&cuArray, &channelDesc, W, H);
-    cudaMemcpy2DToArray(
-        cuArray,
-        0,
-        0,
-        tensor.data_ptr<float>(),
-        W * sizeof(float_n),
-        W * sizeof(float_n),
-        H,
-        cudaMemcpyDeviceToDevice);
 
     cudaResourceDesc resDesc = {};
     resDesc.resType          = cudaResourceTypeArray;
@@ -437,7 +427,7 @@ __host__ cudaTextureObject_t create_texture_from_tensor(
 }
 
 template <typename OutputType>
-__host__ void accumulate_one_level(
+__host__ inline void accumulate_one_level(
     cudaStream_t        stream,
     const int           level,
     const int           H,
@@ -449,7 +439,8 @@ __host__ void accumulate_one_level(
     OutputType          img_out,     // [H, W, 4]
 
     // clang-format off
-    torch::autograd::variable_list& save
+    torch::autograd::variable_list& save,
+    const int batch_idx
     // clang-format on
 ) {
     // auto stream_guard =
@@ -461,13 +452,10 @@ __host__ void accumulate_one_level(
     auto max_map        = torch::Tensor();
     auto inv_kernel_sum = torch::Tensor();
     if (need_save) {
-        rgb_filtered = torch::zeros(
-            {weight_map.size(0), weight_map.size(1), 4},
-            torch::TensorOptions()
-                .device(weight_map.device())
-                .dtype(weight_map.dtype()));
-        max_map        = torch::zeros_like(weight_map);
-        inv_kernel_sum = torch::zeros_like(weight_map);
+        int&& idx      = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
+        rgb_filtered   = save[idx].index({batch_idx});
+        max_map        = save[idx + 1].index({batch_idx});
+        inv_kernel_sum = save[idx + 2].index({batch_idx});
     }
 
     // apply kernel
@@ -483,31 +471,23 @@ __host__ void accumulate_one_level(
         (need_save ? rgb_filtered.data_ptr<float>() : nullptr),
         (need_save ? max_map.data_ptr<float>() : nullptr),
         (need_save ? inv_kernel_sum.data_ptr<float>() : nullptr));
-
-    // save tensors
-    if (need_save) {
-        int&& idx     = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
-        save[idx]     = rgb_filtered;
-        save[idx + 1] = max_map;
-        save[idx + 2] = inv_kernel_sum;
-    }
 }
 
 template <typename OutputType>
-__host__ void forward(
+__host__ inline void forward(
     cudaStream_t        stream,
     torch::Tensor       weight_map,  // [L, H, W]
     torch::Tensor       kernel_map,  // [L, H, W]
     cudaTextureObject_t img_in_tex,  // [H, W, 4]
     OutputType          img_out,     // [H, W, 4]
     // clang-format off
-    torch::autograd::variable_list& save
-    // ,int batch_idx
+    torch::autograd::variable_list& save,
+    const int batch_idx
     // clang-format on
 ) {
-    const int L       = kernel_map.size(0);
-    const int H       = kernel_map.size(1);
-    const int W       = kernel_map.size(2);
+    const int L = kernel_map.size(0);
+    const int H = kernel_map.size(1);
+    const int W = kernel_map.size(2);
 
     for (int level = 0; level < L; level++) {
         accumulate_one_level<OutputType>(
@@ -520,138 +500,33 @@ __host__ void forward(
             kernel_map.index({level}),
             weight_map.index({level}),
             img_out,
-            save);
+            save, 
+            batch_idx);
     }
-
 }
-};  // namespace host
 
-class Filtering : public torch::autograd::Function<Filtering> {
-public:
+__host__ inline void grad_accumulate_one_level(
+    cudaStream_t  stream,
+    const int     level,
+    const int     SIZE,
+    const int     H,
+    const int     W,
+    const int     L,
+    torch::Tensor grad_output,     // [H, W, 4]
+    torch::Tensor img_in,          // [H, W, 4]
+    torch::Tensor rgb_filtered,    // [H, W, 4]
+    torch::Tensor max_map,         // [H, W]
+    torch::Tensor inv_kernel_sum,  // [H, W]
+    torch::Tensor weight_map,      // [H, W]
+    torch::Tensor kernel_map,      // [H, W]
+    torch::Tensor grad_weight,     // [H, W]
+    torch::Tensor grad_kernel      // [H, W]
+) {
     constexpr static const int N_THREADS = 512;
 
-    // forward
-    static torch::Tensor forward(
-        // clang-format off
-        torch::autograd::AutogradContext* ctx,
-        // clang-format on
-        torch::Tensor weight_map,  // [L, H, W]
-        torch::Tensor kernel_map,  // [L, H, W]
-        torch::Tensor img_in,      // [H, W, 4]
-        bool          requires_grad) {
-
-        const int L = kernel_map.size(0);
-        const int H = kernel_map.size(1);
-        const int W = kernel_map.size(2);
-
-        // variables to save
-        auto save = torch::autograd::variable_list{};
-        if (requires_grad) {
-            // std::cout << "save context" << std::endl;
-            save.resize(SAVED_INPUTS_CNT + L * SAVED_PER_LEVEL_CNT);
-            save[0] = weight_map;
-            save[1] = kernel_map;
-            save[2] = img_in;
-        }
-
-        // create img_in texture
-        cudaArray_t         img_in_cu;
-        cudaTextureObject_t img_in_tex =
-            host::create_texture_from_tensor<float4>(img_in_cu, H, W, img_in);
-        
-        // applying & fusing
-        auto stream  = at::cuda::getCurrentCUDAStream();
-        auto img_out = torch::zeros_like(img_in);  // [H, W, 4]
-        host::forward<float*>(
-            stream,
-            weight_map,
-            kernel_map,
-            img_in_tex,
-            img_out.data_ptr<float>(),
-            save);
-
-        // free cuda array for texture object
-        cudaDestroyTextureObject(img_in_tex);
-        cudaFreeArray(img_in_cu);
-       
-        // save context
-        if (requires_grad) {
-            ctx->save_for_backward(save);
-        }
-        return img_out;
-    }
-
-    static torch::autograd::tensor_list backward(
-        torch::autograd::AutogradContext* ctx,
-        torch::autograd::tensor_list      grad_outputs) {
-        auto saved       = ctx->get_saved_variables();
-        auto weight_map  = saved[0];                      // [L, H, W]
-        auto kernel_map  = saved[1];                      // [L, H, W]
-        auto img_in      = saved[2];                      // [H, W, 4]
-        auto grad_output = grad_outputs[0].contiguous();  // [H, W, 4]
-
-        // get dimensions
-        const int L    = kernel_map.size(0);
-        const int H    = kernel_map.size(1);
-        const int W    = kernel_map.size(2);
-        const int SIZE = H * W;
-
-        // create buffer
-        auto grad_weight = torch::zeros_like(weight_map);
-        auto grad_kernel = torch::zeros_like(kernel_map);
-        // std::cout << "grad_input" << grad_input << std::endl;
-
-        // accumulate grads for each level
-        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-        for (int level = 0; level < L; level++) {
-            int&& saved_idx = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
-            grad_accumulate_one_level(
-                stream,
-                level,
-                SIZE,
-                H,
-                W,
-                L,
-                grad_output,
-                img_in,
-                saved[saved_idx],            // rgb_filtered
-                saved[saved_idx + 1],        // max_map
-                saved[saved_idx + 2],        // inv_kernel_sum
-                weight_map.index({level}),   // weight_map
-                kernel_map.index({level}),   // kernel_map
-                grad_weight.index({level}),  // grad_weight
-                grad_kernel.index({level})   // grad_kernel
-            );
-        }
-
-        return {
-            grad_weight,
-            grad_kernel,
-            torch::Tensor(),
-            torch::Tensor(),
-        };
-    }
-
-    static void grad_accumulate_one_level(
-        cudaStream_t  stream,
-        const int     level,
-        const int     SIZE,
-        const int     H,
-        const int     W,
-        const int     L,
-        torch::Tensor grad_output,     // [H, W, 4]
-        torch::Tensor img_in,          // [H, W, 4]
-        torch::Tensor rgb_filtered,    // [H, W, 4]
-        torch::Tensor max_map,         // [H, W]
-        torch::Tensor inv_kernel_sum,  // [H, W]
-        torch::Tensor weight_map,      // [H, W]
-        torch::Tensor kernel_map,      // [H, W]
-        torch::Tensor grad_weight,     // [H, W]
-        torch::Tensor grad_kernel      // [H, W]
-    ) {
-        // compute weight grads
-        const int grad_weight_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
-        // clang-format off
+    // compute weight grads
+    const int grad_weight_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
+    // clang-format off
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(
             grad_kernel.type(), "backward_grad_weight", ([&] {
                 kernel::grad_weight_accumulate<scalar_t>
@@ -662,17 +537,16 @@ public:
                         rgb_filtered.data_ptr<scalar_t>(),
                         grad_weight.data_ptr<scalar_t>());
             }));
-        // clang-format on
+    // clang-format on
 
-        // kernel size
-        const int support = level + 1;
-        const int K       = 1 + (support << 1);
-        const int K_SIZE  = K * K;
+    // kernel size
+    const int support = level + 1;
+    const int K       = 1 + (support << 1);
+    const int K_SIZE  = K * K;
 
-        // compute kernel grads
-        const int grad_kernel_blocks =
-            N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
-        // clang-format off
+    // compute kernel grads
+    const int grad_kernel_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
+    // clang-format off
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(
             grad_kernel.type(), "backward_grad_kernel", ([&] {
                 kernel::grad_kernel_accumulate<scalar_t>
@@ -690,7 +564,173 @@ public:
                         inv_kernel_sum.data_ptr<scalar_t>(),
                         grad_kernel.data_ptr<scalar_t>());
             }));
+    // clang-format on
+}
+
+__host__ inline void backward(
+    cudaStream_t  stream,
+    torch::Tensor grad_output,  // [H, W, 4]
+    torch::Tensor img_in,       // [H, W, 4]
+    torch::Tensor weight_map,   // [L, H, W]
+    torch::Tensor kernel_map,   // [L, H, W]
+    torch::Tensor grad_weight,  // [L, H, W]
+    torch::Tensor grad_kernel,  // [L, H, W]
+    // clang-format off
+    torch::autograd::variable_list& saved,
+    const int batch_idx
+    // clang-format on
+) {
+
+    // get dimensions
+    const int L    = kernel_map.size(0);
+    const int H    = kernel_map.size(1);
+    const int W    = kernel_map.size(2);
+    const int SIZE = H * W;
+
+    // accumulate grads for each level
+    for (int level = 0; level < L; level++) {
+        int&& saved_idx = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
+
+        grad_accumulate_one_level(
+            stream,
+            level,
+            SIZE,
+            H,
+            W,
+            L,
+            grad_output,
+            img_in,
+            saved[saved_idx].index({batch_idx}),      // rgb_filtered
+            saved[saved_idx + 1].index({batch_idx}),  // max_map
+            saved[saved_idx + 2].index({batch_idx}),  // inv_kernel_sum
+            weight_map.index({level}),                // weight_map
+            kernel_map.index({level}),                // kernel_map
+            grad_weight.index({level}),               // grad_weight
+            grad_kernel.index({level})                // grad_kernel
+        );
+    }
+}
+
+};  // namespace host
+
+class Filtering : public torch::autograd::Function<Filtering> {
+public:
+    // forward
+    static torch::Tensor forward(
+        // clang-format off
+        torch::autograd::AutogradContext* ctx,
         // clang-format on
+        torch::Tensor weight_map,  // [B, L, H, W]
+        torch::Tensor kernel_map,  // [B, L, H, W]
+        torch::Tensor img_in,      // [B, H, W, 4]
+        bool          requires_grad) {
+
+        const int B = kernel_map.size(0);
+        const int L = kernel_map.size(1);
+        const int H = kernel_map.size(2);
+        const int W = kernel_map.size(3);
+
+        // variables to save
+        auto save = torch::autograd::variable_list{};
+        if (requires_grad) {
+            // std::cout << "save context" << std::endl;
+            save.resize(SAVED_INPUTS_CNT + L * SAVED_PER_LEVEL_CNT);
+            save[0] = weight_map;
+            save[1] = kernel_map;
+            save[2] = img_in;
+
+            auto options = torch::TensorOptions()
+                               .device(weight_map.device())
+                               .dtype(weight_map.dtype());
+            for (int level = 0; level < L; level++) {
+                int&& idx = SAVED_INPUTS_CNT + level * SAVED_PER_LEVEL_CNT;
+                // clang-format off
+                save[idx] = torch::zeros({B, H, W, 4}, options);   // rgb_filtered
+                save[idx + 1] = torch::zeros({B, H, W}, options);  // max_map
+                save[idx + 2] = torch::zeros({B, H, W}, options);  // inv_kernel_sum
+                // clang-format on
+            }
+        }
+        
+        // create img_in texture
+        cudaArray_t         img_in_cu;
+        cudaTextureObject_t img_in_tex =
+            host::create_texture_from_tensor<float4>(img_in_cu, H, W);
+        auto stream  = at::cuda::getCurrentCUDAStream();
+
+        // Write to output for each batch
+        auto img_out = torch::zeros_like(img_in);  // [B, H, W, 4]
+        for (int i = 0; i < B; i++) {
+            // Read img_in to img_tex
+            cudaMemcpy2DToArray(
+                img_in_cu,
+                0,
+                0,
+                img_in.index({i}).data_ptr<float>(),
+                W * sizeof(float4),
+                W * sizeof(float4),
+                H,
+                cudaMemcpyDeviceToDevice);
+
+            // applying & fusing
+            host::forward<float*>(
+                stream,
+                weight_map.index({i}),
+                kernel_map.index({i}),
+                img_in_tex,
+                img_out.index({i}).data_ptr<float>(),
+                save,
+                i);
+        }
+
+        // free cuda array for texture object
+        cudaDestroyTextureObject(img_in_tex);
+        cudaFreeArray(img_in_cu);
+       
+        // save context
+        if (requires_grad) {
+            ctx->save_for_backward(save);
+        }
+        return img_out;
+    }
+
+    static torch::autograd::tensor_list backward(
+        torch::autograd::AutogradContext* ctx,
+        torch::autograd::tensor_list      grad_outputs) {
+        auto saved       = ctx->get_saved_variables();
+        auto weight_map  = saved[0];                      // [B, L, H, W]
+        auto kernel_map  = saved[1];                      // [B, L, H, W]
+        auto img_in      = saved[2];                      // [B, H, W, 4]
+        auto grad_output = grad_outputs[0].contiguous();  // [B, H, W, 4]
+
+        // get dimensions
+        const int B    = kernel_map.size(0);
+
+        // create buffer
+        auto grad_weight = torch::zeros_like(weight_map);  // [B, L, H, W]
+        auto grad_kernel = torch::zeros_like(kernel_map);  // [B, L, H, W]
+        // std::cout << "grad_input" << grad_input << std::endl;
+
+        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+        for (int i = 0; i < B; i++) {
+            host::backward(
+                stream,
+                grad_output.index({i}),
+                img_in.index({i}),
+                weight_map.index({i}),
+                kernel_map.index({i}),
+                grad_weight.index({i}),
+                grad_kernel.index({i}),
+                saved,
+                i);
+        }
+
+        return {
+            grad_weight,
+            grad_kernel,
+            torch::Tensor(),
+            torch::Tensor(),
+        };
     }
 };
 
@@ -708,13 +748,14 @@ void filtering(
         kernel_map,
         img_in,
         img_out,
-        empty);
+        empty,
+        -1);
 }
 
 torch::Tensor filtering_autograd(
-    torch::Tensor weight_map,  // [L, H, W]
-    torch::Tensor kernel_map,  // [L, H, W]
-    torch::Tensor img_in,      // [H, W, 4]
+    torch::Tensor weight_map,  // [B, L, H, W]
+    torch::Tensor kernel_map,  // [B, L, H, W]
+    torch::Tensor img_in,      // [B, H, W, 4]
     bool          requires_grad) {
     return Filtering::apply(weight_map, kernel_map, img_in, requires_grad);
 }

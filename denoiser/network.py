@@ -81,25 +81,8 @@ def filtering(model, aux_buffer, img_in, requires_grad=False):
     weight_map, kernel_map = model(aux_buffer)
 
     # kernel reconstruction and apply
-    B = img_in.shape[0]
-    if B == 1:
-        # filtering only support B == 1
-        weight_map = weight_map.squeeze(0) # [L, H, W]
-        kernel_map = kernel_map.squeeze(0) # [L, H, W]
-        img_in = img_in.squeeze(0) # [H, W, 4]
-        img_out = _denoiser.filtering_autograd(
-            weight_map, kernel_map, img_in, requires_grad=requires_grad)
-        return img_out.unsqueeze(0) # [B, H, W, 4]
-
-    # streams = [torch.cuda.Stream(), torch.cuda.Stream()]
-    # torch.cuda.synchronize()
-    img_out = torch.zeros_like(img_in)
-    for i in range(B):
-        # with torch.cuda.stream(streams[i % 2]):
-        img_out[i] = _denoiser.filtering_autograd(
-            weight_map[i], kernel_map[i], img_in[i], requires_grad=requires_grad)
-
-    # torch.cuda.synchronize()
+    img_out = _denoiser.filtering_autograd(
+        weight_map, kernel_map, img_in, requires_grad=requires_grad)
     return img_out
 
 class GuidanceNet(nn.Module):
