@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 
 #include <memory>
+#include <cstring>
 
 #include "pcg32.h"
 #include "volrend/cuda/common.cuh"

@@ -294,8 +294,8 @@ int main(int argc, char *argv[])
     // Load render options
     RenderOptions options;
     // if (dataset_type == "blender") {
-        //auto f_options = std::ifstream("/home/shuzixi/FasterNeRF/volrend/renderer/options/blender.json");
-        auto f_options = std::ifstream("D:/111/projects/volrend/data/lego/blender.json");
+        auto f_options = std::ifstream("/home/yiran/szx/ours/renderer/options/blender.json");
+        // auto f_options = std::ifstream("D:/111/projects/volrend/data/lego/blender.json");
         json j_options = json::parse(f_options);
         options = j_options;
     // } else {
