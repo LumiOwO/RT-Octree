@@ -283,7 +283,7 @@ int main(int argc, char *argv[])
 
     // Prepare render context
     RenderContext ctx;
-    ctx.offscreen  = true;
+    ctx.offscreen = true;
     ctx.update(array, nullptr, width, height);
 
     // Create denoiser
@@ -320,17 +320,31 @@ int main(int argc, char *argv[])
         ctx.rng.advance();
     }
 
+#ifdef DEBUG_TIME_RECORD
+    ctx.timer().reset(stream);
+#endif
+
     // Begin render
-    cudaEventRecord(start);
+    cudaEventRecord(start, stream);
     for (size_t i = 0; i < trans.size(); ++i)
     {
         camera.transform = trans[i];
         camera._update(false);
 
+#ifdef DEBUG_TIME_RECORD
+        ctx.timer().render_start();
+#endif
         launch_renderer(tree, camera, options, ctx, stream, true);
+#ifdef DEBUG_TIME_RECORD
+        ctx.timer().render_stop();
+#endif
         if (options.denoise) {
             denoiser->denoise(camera, ctx, stream);
         }
+#ifdef DEBUG_TIME_RECORD
+        ctx.timer().record();
+#endif
+
         // update rng
         ctx.rng.advance();
 
@@ -371,7 +385,7 @@ int main(int argc, char *argv[])
             outfile.close();
         }
     }
-    cudaEventRecord(stop);
+    cudaEventRecord(stop, stream);
     cudaEventSynchronize(stop);
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
@@ -379,6 +393,13 @@ int main(int argc, char *argv[])
 
     printf("%.10f ms per frame\n", milliseconds);
     printf("%.10f fps\n", 1000.f / milliseconds);
+
+#ifdef DEBUG_TIME_RECORD
+    ctx.timer().report();
+#endif
+
+    cuda(EventDestroy(start));
+    cuda(EventDestroy(stop));
 
     ctx.freeResource();
     cuda(FreeArray(array));

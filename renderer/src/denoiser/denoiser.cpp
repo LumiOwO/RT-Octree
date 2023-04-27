@@ -33,6 +33,9 @@ public:
         const int W = cam.width;
         const int L = 6;
 
+#ifdef DEBUG_TIME_RECORD
+        ctx.timer().torch_start();
+#endif
         // Wrap with tensor
         torch::TensorOptions tensor_options =
             torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
@@ -46,9 +49,17 @@ public:
         torch::Tensor weight_map = maps[0].toTensor().squeeze(0); // [L, H, W]
         torch::Tensor kernel_map = maps[1].toTensor().squeeze(0); // [L, H, W]
 
+#ifdef DEBUG_TIME_RECORD
+        ctx.timer().torch_stop();
+        ctx.timer().filter_start();
+#endif
         // kernel applying
         denoiser::filtering(
             stream, weight_map, kernel_map, ctx.noisy_tex_obj, ctx.surf_obj);
+
+#ifdef DEBUG_TIME_RECORD
+        ctx.timer().filter_stop();
+#endif
     }
 };
 

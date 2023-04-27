@@ -176,47 +176,31 @@ def compact_and_compile(model: GuidanceNet, device=None):
     model = model.to(device)
     compact = compact.to(device)
 
-    # Check compact correctness
     B, C, H, W = 1, 8, 800, 800
     aux_buffer = torch.rand((B, C, H, W)).to(device)
-    # img_in = torch.rand((B, H, W, 4)).to(device)
-    # with torch.no_grad():
-    #     a1, a2 = model(aux_buffer)
-    #     b1, b2 = compact(aux_buffer)
-    #     print((a1 - b1).abs().max())
-    #     print((a1 - b1).abs().mean())
-    #     print(torch.sqrt(torch.sum((a1 - b1) ** 2)))
-    #     assert ((a1 - b1).abs() < 1e-2).all(), "Compact check failed."
-    #     print((a2 - b2).abs().max())
-    #     print((a2 - b2).abs().mean())
-    #     print(torch.sqrt(torch.sum((a2 - b2) ** 2)))
-    #     assert ((a2 - b2).abs() < 1e-2).all(), "Compact check failed."
 
-    # # aux_buffer = aux_buffer.half()
-    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-    #     with torch.no_grad():
-    #         # aux_buffer = aux_buffer.half()
-    #         out1, out2 = model.forward(aux_buffer)
-    #         # aux_buffer = aux_buffer.float()
-    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+    profile = True
+    if profile:
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+            with torch.no_grad():
+                out1, out2 = model.forward(aux_buffer)
+        print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-    #     with torch.no_grad():
-    #         # aux_buffer = aux_buffer.half()
-    #         out1, out2 = compact.forward(aux_buffer)
-    #         # aux_buffer = aux_buffer.float()
-    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+            with torch.no_grad():
+                out1, out2 = compact.forward(aux_buffer)
+        print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
-    # compact_script = torch.jit.script(compact)
+    # Create torchscript model
+    # guidance_net_ts = torch.jit.script(compact)
     with torch.no_grad(), torch.cuda.amp.autocast():
         guidance_net_ts = torch.jit.trace(compact.forward, (aux_buffer))
-    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-    #     with torch.no_grad():
-    #         aux_buffer = aux_buffer.half()
-    #         out1, out2 = guidance_net_ts(aux_buffer)
-    # print(out1.dtype)
-    # aux_buffer = aux_buffer.float()
-    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+    
+    if profile:
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+            with torch.no_grad():
+                out1, out2 = guidance_net_ts(aux_buffer)
+        print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     # trt_guidance_net_ts = torch_tensorrt.compile(
     #     guidance_net_ts, 
