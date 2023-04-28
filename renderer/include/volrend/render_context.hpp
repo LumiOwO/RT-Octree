@@ -132,7 +132,8 @@ public:
         cudaEvent_t  start[T_CNT] = {};
         cudaEvent_t  stop[T_CNT]  = {};
         float        sum[T_CNT]   = {};
-        int          cnt[T_CNT]   = {};
+
+        int cnt = 0;
 
     public:
         Timer() {
@@ -153,9 +154,9 @@ public:
 
         void reset(cudaStream_t stream) {
             this->stream = stream;
+            cnt = 0;
             for (int i = 0; i < T_CNT; i++) {
                 sum[i] = 0;
-                cnt[i] = 0;
             }
         }
 
@@ -175,31 +176,28 @@ public:
         void torch_stop()   { stop_record(T_TORCH); }
         void filter_stop()  { stop_record(T_FILTER); }
 
-        void record() {
-            for (int i = 0; i < T_CNT; i++) {
-                cudaEventSynchronize(stop[i]);
-            }
+        void record(bool denoise) {
+            cudaEventSynchronize(stop[denoise ? T_FILTER : T_RENDER]);
 
+            cnt++;
             for (int i = 0; i < T_CNT; i++) {
                 float milliseconds = 0;
                 cudaEventElapsedTime(&milliseconds, start[i], stop[i]);
                 sum[i] += milliseconds;
-                cnt[i]++;
             }
         }
 
         void report() {
             float all = 0;
-
-            float t   = sum[T_RENDER] / cnt[T_RENDER];
+            float t   = sum[T_RENDER] / cnt;
             printf("render: %.10f ms per frame\n", t);
             all += t;
 
-            t = sum[T_TORCH] / cnt[T_TORCH];
+            t = sum[T_TORCH] / cnt;
             printf("torch:  %.10f ms per frame\n", t);
             all += t;
 
-            t = sum[T_FILTER] / cnt[T_FILTER];
+            t = sum[T_FILTER] / cnt;
             printf("filter: %.10f ms per frame\n", t);
             all += t;
 

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 import os
 
+# import tensorrt 
 # import torch_tensorrt
 
 try:
@@ -175,6 +176,7 @@ def compact_and_compile(model: GuidanceNet, device=None):
 
     model = model.to(device)
     compact = compact.to(device)
+    compact = compact.half()
 
     B, C, H, W = 1, 8, 800, 800
     aux_buffer = torch.rand((B, C, H, W)).to(device)
@@ -192,9 +194,16 @@ def compact_and_compile(model: GuidanceNet, device=None):
         print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     # Create torchscript model
+    def cast_and_forward(aux_buffer):
+        aux_buffer = aux_buffer.half()
+        return compact.forward(aux_buffer)
+
+    torch._C._jit_set_profiling_mode(False)
     # guidance_net_ts = torch.jit.script(compact)
-    with torch.no_grad(), torch.cuda.amp.autocast():
-        guidance_net_ts = torch.jit.trace(compact.forward, (aux_buffer))
+    with torch.no_grad():
+        guidance_net_ts = torch.jit.trace(cast_and_forward, (aux_buffer))
+    # guidance_net_ts = torch.jit.optimize_for_inference(guidance_net_ts)
+    print(guidance_net_ts.code)
     
     if profile:
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
@@ -204,14 +213,12 @@ def compact_and_compile(model: GuidanceNet, device=None):
 
     # trt_guidance_net_ts = torch_tensorrt.compile(
     #     guidance_net_ts, 
-    #     inputs=[torch_tensorrt.Input(aux_buffer.shape, dtype=torch.float16)],
+    #     inputs=[torch_tensorrt.Input(aux_buffer.shape, dtype=aux_buffer.dtype)],
     #     enabled_precisions={torch.float16},
     # )
     # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
     #     with torch.no_grad():
-    #         aux_buffer = aux_buffer.half()
     #         out1_trt, out2_trt = trt_guidance_net_ts(aux_buffer)
-    #         aux_buffer = aux_buffer.float()
     # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
     # print((out1_trt - out1).max())

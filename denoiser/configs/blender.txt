@@ -1,6 +1,6 @@
-logs_root = ./logs/lego
-exp_name = rural-armadillo-2
-data_dir = ./data/nerf_synthetic/lego
+logs_root = ./logs
+exp_name = ship
+data_dir = ./data/nerf_synthetic/ship
 
 dataset_type = blender
 spp = 4

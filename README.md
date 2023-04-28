@@ -6,6 +6,11 @@ This implementation is based on [PlenOctree](https://github.com/sxyu/volrend)
 
 ## Renderer
 
+### Tensorrt
+pip install nvidia-pyindex
+pip install nvidia-tensorrt==8.2.4.2
+pip install https://github.com/pytorch/TensorRT/releases/download/v1.1.0/torch_tensorrt-1.1.0-cp39-cp39-linux_x86_64.whl
+
 ### Libtorch
 - Linux: 
 https://download.pytorch.org/libtorch/cu113/libtorch-cxx11-abi-shared-with-deps-1.11.0%2Bcu113.zip

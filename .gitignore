@@ -10,4 +10,4 @@ output*/
 __pycache__/
 logs*/
 wandb/
-libtorch/
+libtorch

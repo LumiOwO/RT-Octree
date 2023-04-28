@@ -126,6 +126,8 @@ int main(int argc, char *argv[])
                 cxxopts::value<float>()->default_value("1"))
         ("max_imgs", "max images to render, default no limit",
                 cxxopts::value<int>()->default_value("0"))
+        ("options", "render options",
+                cxxopts::value<std::string>()->default_value(""))
         ("dataset", "dataset type",
                 cxxopts::value<std::string>()->default_value("blender"))
         ("ts_module", "path to torchscript module",
@@ -293,20 +295,19 @@ int main(int argc, char *argv[])
 
     // Load render options
     RenderOptions options;
-    // if (dataset_type == "blender") {
-        auto f_options = std::ifstream("/home/yiran/szx/ours/renderer/options/blender.json");
-        // auto f_options = std::ifstream("D:/111/projects/volrend/data/lego/blender.json");
+    auto options_path = args["options"].as<std::string>();
+    if (!options_path.empty()) {
+        auto f_options = std::ifstream(options_path);
         json j_options = json::parse(f_options);
         options = j_options;
-    // } else {
-         //options = internal::render_options_from_args(args);
-         //options.delta_tracking = true;
-         //options.denoise = false;
-         //options.spp = 4;
-         // std::ofstream o(args["file"].as<std::string>() + "pretty.json");
-         // json j = options;
-         // o << std::setw(2) << j << std::endl;
-    // }
+    } else {
+        options = internal::render_options_from_args(args);
+        //  options.denoise = false;
+        //  options.spp = 4;
+        //  std::ofstream o(args["file"].as<std::string>() + "pretty.json");
+        //  json j = options;
+        //  o << std::setw(2) << j << std::endl;
+    }
 
     // Warm up
     camera.transform = trans[0];
@@ -342,7 +343,7 @@ int main(int argc, char *argv[])
             denoiser->denoise(camera, ctx, stream);
         }
 #ifdef DEBUG_TIME_RECORD
-        ctx.timer().record();
+        ctx.timer().record(options.denoise);
 #endif
 
         // update rng
@@ -404,4 +405,4 @@ int main(int argc, char *argv[])
     ctx.freeResource();
     cuda(FreeArray(array));
     cuda(StreamDestroy(stream));
-}
+    }

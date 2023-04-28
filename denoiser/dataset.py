@@ -45,8 +45,9 @@ class DenoiserDataset():
                 torch.from_numpy(x) # [H, W, 4]
                 for x in imgs_gt[s]])
             
-            if args.preload:
-                tqdm.write("Moving to cuda...")
+        if args.preload:
+            tqdm.write("Moving to cuda...")
+            for s in aux_buffer.keys():
                 self.aux_buffer[s] = self.aux_buffer[s].to(device)
                 self.imgs_in[s] = self.imgs_in[s].to(device)
                 self.imgs_gt[s] = self.imgs_gt[s].to(device)
@@ -216,7 +217,7 @@ class TanksAndTemplesDataset(DenoiserDataset):
 
                 aux_buffer = np.fromfile(
                     os.path.join(args.data_dir, f"spp_{args.spp}", "buf_" + name + ".bin"), 
-                    dtype=np.float32).reshape((8, 1920, 1080))
+                    dtype=np.float32).reshape((8, 1080, 1920)) # [C, H, W]
                 img_gt = imageio.imread(
                     os.path.join(args.data_dir, "rgb", name + ".png"))
 

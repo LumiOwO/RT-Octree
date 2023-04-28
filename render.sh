@@ -3,20 +3,28 @@ set -e
 
 # export CUDA_VISIBLE_DEVICES=1 
 
-export TREE=../../nerf_synthetic/lego/tree.npz
-export POSES=../../nerf_synthetic/lego/transforms_test.json
-# export OUT_DIR=../../nerf_synthetic/lego/spp_4/test
-export OUT_DIR=../logs/temp
-export TS_MODULE=../logs/lego/ts_000100.ts
+# export DATASET=blender
+# export TREE=../data/nerf_synthetic/lego/tree.npz
+# export POSES=../data/nerf_synthetic/lego/transforms_test.json
+# export OUT_DIR=../data/nerf_synthetic/lego/spp_4/test
+# export TS_MODULE=../logs/lego/rural-armadillo-2/ts_latest.ts
+# export OPTIONS=../renderer/options/blender.json
 
-export FPS_ONLY=true
+export DATASET=tt
+export TREE=../data/TanksAndTemple/Family/tree.npz
+export POSES=../data/TanksAndTemple/Family
+export OUT_DIR=../data/TanksAndTemple/Family/spp_4
+export TS_MODULE=../logs/lego/rural-armadillo-2/ts_latest.ts
+export OPTIONS=../renderer/options/blender.json
+
+export FPS_ONLY=false
 
 cd build
 
-if [ "$FPS_ONLY"=true ]
+if [ "$FPS_ONLY" = true ]
 then
-   ./volrend_headless $TREE $POSES --ts_module=$TS_MODULE
+   ./volrend_headless $TREE $POSES --options=$OPTIONS --ts_module=$TS_MODULE --dataset=$DATASET
 else
-   ./volrend_headless $TREE $POSES --ts_module=$TS_MODULE \
+   ./volrend_headless $TREE $POSES --options=$OPTIONS --ts_module=$TS_MODULE --dataset=$DATASET \
     -o $OUT_DIR --write_buffer
 fi
