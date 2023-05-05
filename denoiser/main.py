@@ -92,6 +92,8 @@ if __name__ == "__main__":
                         help="frequency of weight ckpt saving")
     parser.add_argument("--i_test", type=int, default=50000, 
                         help="frequency of testset saving")
+    parser.add_argument("--save_image", action="store_true",
+                        help="save test images")
 
     # training options
     parser.add_argument("--in_channels", type=int, default=8, 

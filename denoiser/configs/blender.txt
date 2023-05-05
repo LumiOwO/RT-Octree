@@ -8,10 +8,11 @@ preload = true
 nx = 10
 ny = 10
 
-use_wandb = true
+use_wandb = false
 i_print = 1
 i_save = 100
 i_test = 100
+save_image = false
 
 lr = 0.0001
 epochs = 2000

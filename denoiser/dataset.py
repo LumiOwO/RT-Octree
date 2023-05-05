@@ -1,4 +1,5 @@
 import os
+import gc
 import json
 import imageio
 import numpy as np
@@ -9,19 +10,25 @@ import torchvision
 from torch.utils.data import Dataset, DataLoader
 
 class DenoiserDatasetSplit(Dataset):
-    def __init__(self, aux_buffer, imgs_in, imgs_gt, device):
+    def __init__(self, aux_buffer, imgs_in, imgs_gt, device, istorch):
         self.aux_buffer = aux_buffer
         self.imgs_in = imgs_in
         self.imgs_gt = imgs_gt
         self.device = device
+        self.istorch = istorch
 
     def __len__(self):
         return len(self.aux_buffer)
 
     def __getitem__(self, idx):
-        return self.aux_buffer[idx].to(self.device), \
-            self.imgs_in[idx].to(self.device), \
-            self.imgs_gt[idx].to(self.device)
+        if self.istorch:
+            return self.aux_buffer[idx].to(self.device), \
+                self.imgs_in[idx].to(self.device), \
+                self.imgs_gt[idx].to(self.device)
+        else:
+            return torch.from_numpy(self.aux_buffer[idx]).to(self.device), \
+                torch.from_numpy(self.imgs_in[idx]).to(self.device), \
+                torch.from_numpy(self.imgs_gt[idx]).to(self.device)
 
 class DenoiserDataset():
     def __init__(self, args, device=None):
@@ -33,24 +40,30 @@ class DenoiserDataset():
 
         aux_buffer, imgs_in, imgs_gt = self.load_images(args)
 
-        tqdm.write("From numpy to torch...")
-        for s in aux_buffer.keys():
-            self.aux_buffer[s] = torch.stack([
-                torch.from_numpy(x[:args.in_channels, ...]) # [C, H, W]
-                for x in aux_buffer[s]])
-            self.imgs_in[s] = torch.stack([
-                torch.from_numpy(x) # [H, W, 4]
-                for x in imgs_in[s]])
-            self.imgs_gt[s] = torch.stack([
-                torch.from_numpy(x) # [H, W, 4]
-                for x in imgs_gt[s]])
-            
-        if args.preload:
-            tqdm.write("Moving to cuda...")
+        if self.istorch:
+            tqdm.write("From numpy to torch...")
             for s in aux_buffer.keys():
-                self.aux_buffer[s] = self.aux_buffer[s].to(device)
-                self.imgs_in[s] = self.imgs_in[s].to(device)
-                self.imgs_gt[s] = self.imgs_gt[s].to(device)
+                self.aux_buffer[s] = torch.stack([
+                    torch.from_numpy(x[:args.in_channels, ...]) # [C, H, W]
+                    for x in aux_buffer[s]])
+                self.imgs_in[s] = torch.stack([
+                    torch.from_numpy(x) # [H, W, 4]
+                    for x in imgs_in[s]])
+                self.imgs_gt[s] = torch.stack([
+                    torch.from_numpy(x) # [H, W, 4]
+                    for x in imgs_gt[s]])
+                
+            if args.preload:
+                tqdm.write("Moving to cuda...")
+                for s in aux_buffer.keys():
+                    self.aux_buffer[s] = self.aux_buffer[s].to(device)
+                    self.imgs_in[s] = self.imgs_in[s].to(device)
+                    self.imgs_gt[s] = self.imgs_gt[s].to(device)
+        else:
+            self.aux_buffer = aux_buffer
+            self.imgs_in = imgs_in
+            self.imgs_gt = imgs_gt
+            
 
     def load_images(self, args):
         raise NotImplementedError()
@@ -131,7 +144,8 @@ class DenoiserDataset():
 
     def dataloader(self, task):
         dataset = DenoiserDatasetSplit(
-            self.aux_buffer[task], self.imgs_in[task], self.imgs_gt[task], self.device)
+            self.aux_buffer[task], self.imgs_in[task], self.imgs_gt[task], 
+            self.device, self.istorch)
         loader = DataLoader(dataset,
             shuffle=(task == "train"),
             batch_size=(self.args.batch_size if task == "train" else 1), 
@@ -141,6 +155,7 @@ class DenoiserDataset():
 
 class BlenderDataset(DenoiserDataset):
     def load_images(self, args):
+        self.istorch = True
         aux_buffers = {}
         imgs_in = {}
         imgs_gt = {}
@@ -190,6 +205,7 @@ class BlenderDataset(DenoiserDataset):
 
 class TanksAndTemplesDataset(DenoiserDataset):
     def load_images(self, args):
+        self.istorch = False
         aux_buffers = {}
         imgs_in = {}
         imgs_gt = {}

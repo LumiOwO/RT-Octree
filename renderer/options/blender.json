@@ -4,7 +4,6 @@
     0,
     24
   ],
-  "delta_tracking": true,
   "denoise": false,
   "spp": 4,
   "enable_probe": false,

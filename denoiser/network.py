@@ -181,7 +181,7 @@ def compact_and_compile(model: GuidanceNet, device=None):
     B, C, H, W = 1, 8, 800, 800
     aux_buffer = torch.rand((B, C, H, W)).to(device)
 
-    profile = True
+    profile = False
     if profile:
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
             with torch.no_grad():
@@ -203,7 +203,7 @@ def compact_and_compile(model: GuidanceNet, device=None):
     with torch.no_grad():
         guidance_net_ts = torch.jit.trace(cast_and_forward, (aux_buffer))
     # guidance_net_ts = torch.jit.optimize_for_inference(guidance_net_ts)
-    print(guidance_net_ts.code)
+    # print(guidance_net_ts.code)
     
     if profile:
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:

@@ -5,17 +5,18 @@ data_dir = ./data/TanksAndTemple/Barn
 dataset_type = tt
 spp = 4
 preload = false
-nx = 1
-ny = 1
+nx = 10
+ny = 10
 
-use_wandb = false
+use_wandb = true
 i_print = 1
 i_save = 100
-i_test = 1
+i_test = 100
+save_image = false
 
 lr = 0.0001
 epochs = 2000
-batch_size = 1
+batch_size = 32
 
 in_channels = 8
 mid_channels = 32

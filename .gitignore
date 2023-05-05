@@ -8,6 +8,6 @@ output*/
 .vs
 .vscode
 __pycache__/
-logs*/
+logs*
 wandb/
 libtorch

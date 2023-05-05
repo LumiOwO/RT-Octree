@@ -352,9 +352,21 @@ int main(int argc, char *argv[])
         if (!out_dir.size()) {
             continue;
         }
-        
-        // write image
-        {
+
+        if (args["write_buffer"].as<bool>()) {
+            // write auxiliary buffer
+            const size_t SIZE =
+                sizeof(float) * RenderContext::CHANNELS * width * height;
+            cuda(Memcpy(
+                buf.data(), ctx.aux_buffer, SIZE, cudaMemcpyDeviceToHost));
+
+            auto outfile = std::ofstream(
+                out_dir + "/buf_" + basenames[i] + ".bin",
+                std::ios::out | std::ios::binary);
+            outfile.write((char *)buf.data(), SIZE);
+            outfile.close();
+        } else {
+            // write image
             cuda(Memcpy2DFromArray(
                 buf.data(),
                 sizeof(float4) * width,
@@ -371,20 +383,7 @@ int main(int argc, char *argv[])
             std::string fpath = out_dir + "/" + basenames[i] + ".png";
             internal::write_png_file(fpath, buf_uint8.data(), width, height);
         }
-        
-        // write auxiliary buffer
-        if (args["write_buffer"].as<bool>()) {
-            const size_t SIZE =
-                sizeof(float) * RenderContext::CHANNELS * width * height;
-            cuda(Memcpy(
-                buf.data(), ctx.aux_buffer, SIZE, cudaMemcpyDeviceToHost));
 
-            auto outfile = std::ofstream(
-                out_dir + "/buf_" + basenames[i] + ".bin",
-                std::ios::out | std::ios::binary);
-            outfile.write((char *)buf.data(), SIZE);
-            outfile.close();
-        }
     }
     cudaEventRecord(stop, stream);
     cudaEventSynchronize(stop);

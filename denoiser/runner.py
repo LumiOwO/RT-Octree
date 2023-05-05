@@ -128,8 +128,10 @@ class Runner(object):
         
     def test_one_epoch(self, model, dataloader, save_dirname):
         # batch_size == 1 when testing
-        save_dir = os.path.join(self.args.work_dir, save_dirname)
-        os.makedirs(save_dir, exist_ok=True)
+
+        if self.args.save_image:
+            save_dir = os.path.join(self.args.work_dir, save_dirname)
+            os.makedirs(save_dir, exist_ok=True)
 
         # Test full model
         for m in self.metrics:
@@ -164,8 +166,9 @@ class Runner(object):
             for m in self.metrics:
                 m.measure(img_out[..., :3], img_gt[..., :3])
             
-            img_out[..., -1:] = 1
-            self.logger.log_image(img_out, save_dir, "r", batch_idx, {"epoch": self.epoch})
+            if self.args.save_image:
+                img_out[..., -1:] = 1
+                self.logger.log_image(img_out, save_dir, "r", batch_idx, {"epoch": self.epoch})
 
         avg_loss = avg_loss / len(dataloader)
         compact_model_log = {

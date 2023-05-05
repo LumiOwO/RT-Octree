@@ -7,14 +7,14 @@ set -e
 # export TREE=../data/nerf_synthetic/lego/tree.npz
 # export POSES=../data/nerf_synthetic/lego/transforms_test.json
 # export OUT_DIR=../data/nerf_synthetic/lego/spp_4/test
-# export TS_MODULE=../logs/lego/rural-armadillo-2/ts_latest.ts
+# export TS_MODULE=../logs/ts_latest.ts
 # export OPTIONS=../renderer/options/blender.json
 
 export DATASET=tt
-export TREE=../data/TanksAndTemple/Family/tree.npz
-export POSES=../data/TanksAndTemple/Family
-export OUT_DIR=../data/TanksAndTemple/Family/spp_4
-export TS_MODULE=../logs/lego/rural-armadillo-2/ts_latest.ts
+export TREE=../data/TanksAndTemple/Barn/tree.npz
+export POSES=../data/TanksAndTemple/Barn
+export OUT_DIR=../data/TanksAndTemple/Barn/spp_4
+export TS_MODULE=../logs/ts_latest.ts
 export OPTIONS=../renderer/options/blender.json
 
 export FPS_ONLY=false
