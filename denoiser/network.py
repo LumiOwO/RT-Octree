@@ -96,11 +96,12 @@ class GuidanceNet(nn.Module):
         self.kernel_levels = kernel_levels
 
         layers = []
-        layers.append(RepVGGBlock(in_channels, mid_channels, num_branches))
-        for _ in range(num_layers - 2):
-            layers.append(RepVGGBlock(mid_channels, mid_channels, num_branches))
+        for i in range(num_layers - 1):
+            layers.append(RepVGGBlock(mid_channels if i > 0 else in_channels, 
+                                      mid_channels, num_branches))
 
-        layers.append(RepVGGBlock(mid_channels, kernel_levels * 2, num_branches))
+        layers.append(RepVGGBlock(mid_channels if num_layers > 1 else in_channels, 
+                                  kernel_levels * 2, num_branches))
         self.layers = nn.ModuleList(layers)
 
     def forward(self, aux_buffer):
@@ -172,6 +173,7 @@ class GuidanceNetCompact(GuidanceNet):
 def compact_and_compile(model: GuidanceNet, device=None):
     # Compact
     model = model.eval().cpu()
+    # model = GuidanceNet(in_channels=8, mid_channels=16, num_branches=5, num_layers=2, kernel_levels=6)
     compact = GuidanceNetCompact(model).eval()
 
     model = model.to(device)

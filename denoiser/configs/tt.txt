@@ -1,9 +1,9 @@
 logs_root = ./logs
-exp_name = Barn
-data_dir = ./data/TanksAndTemple/Barn
+exp_name = Ignatius
+data_dir = ./data/TanksAndTemple/Ignatius
 
 dataset_type = tt
-spp = 4
+spp = 6
 preload = false
 nx = 10
 ny = 10
@@ -20,7 +20,7 @@ batch_size = 32
 
 in_channels = 8
 mid_channels = 32
-num_layers = 3
-num_branches = 3
-kernel_levels = 6
+num_layers = 2
+num_branches = 5
+kernel_levels = 4
 loss_fn = smape

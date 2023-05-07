@@ -403,75 +403,30 @@ __host__ void launch_renderer(
     constexpr int N_CUDA_THREADS = 512;
     const int blocks = N_BLOCKS_NEEDED(cam.width * cam.height, N_CUDA_THREADS);
 
+#define __CASE(SPP)                                     \
+    {                                                   \
+        device::render_kernel_delta_trace<SPP>          \
+            <<<blocks, N_CUDA_THREADS, 0, stream>>>(    \
+                cam, tree, options, probe_coeffs, ctx); \
+    }
+
     // render
+    // clang-format off
     switch (options.spp) {
-        case 1:
-            device::render_kernel_delta_trace<1>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
-        case 2:
-            device::render_kernel_delta_trace<2>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
-        case 3:
-            device::render_kernel_delta_trace<3>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
-        case 4:
-            device::render_kernel_delta_trace<4>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
-        case 8:
-            device::render_kernel_delta_trace<8>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
-        case 16:
-            device::render_kernel_delta_trace<16>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
-        case 32:
-            device::render_kernel_delta_trace<32>
-                <<<blocks, N_CUDA_THREADS, 0, stream>>>(
-                    cam,
-                    tree,
-                    options,
-                    probe_coeffs,
-                    ctx);
-            break;
+        case 1: __CASE(1); break;
+        case 2: __CASE(2); break;
+        case 3: __CASE(3); break;
+        case 4: __CASE(4); break;
+        case 6: __CASE(6); break;
+        case 8: __CASE(8); break;
+        case 16: __CASE(16); break;
+        case 32: __CASE(32); break;
         default:
             throw std::runtime_error(
                 "spp == " + std::to_string(options.spp) + " not supported.");
     }
+    // clang-format on
+#undef __CASE
 
     if (options.enable_probe) {
         cudaFree(probe_coeffs);

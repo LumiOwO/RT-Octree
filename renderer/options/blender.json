@@ -4,8 +4,8 @@
     0,
     24
   ],
-  "denoise": false,
-  "spp": 4,
+  "denoise": true,
+  "spp": 6,
   "enable_probe": false,
   "grid_max_depth": 4,
   "probe": [

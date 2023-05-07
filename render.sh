@@ -3,21 +3,21 @@ set -e
 
 # export CUDA_VISIBLE_DEVICES=1 
 
-# export DATASET=blender
-# export TREE=../data/nerf_synthetic/lego/tree.npz
-# export POSES=../data/nerf_synthetic/lego/transforms_test.json
-# export OUT_DIR=../data/nerf_synthetic/lego/spp_4/test
-# export TS_MODULE=../logs/ts_latest.ts
-# export OPTIONS=../renderer/options/blender.json
-
-export DATASET=tt
-export TREE=../data/TanksAndTemple/Barn/tree.npz
-export POSES=../data/TanksAndTemple/Barn
-export OUT_DIR=../data/TanksAndTemple/Barn/spp_4
-export TS_MODULE=../logs/ts_latest.ts
+export DATASET=blender
+export TREE=../data/nerf_synthetic/lego/tree.npz
+export POSES=../data/nerf_synthetic/lego/transforms_train.json
+export OUT_DIR=../data/nerf_synthetic/lego/spp_6/train
+export TS_MODULE=/root/volrend/logs/lego/vibrant-sun-8/ts_002000.ts
 export OPTIONS=../renderer/options/blender.json
 
-export FPS_ONLY=false
+# export DATASET=tt
+# export TREE=../data/TanksAndTemple/Truck/tree.npz
+# export POSES=../data/TanksAndTemple/Truck
+# export OUT_DIR=../data/TanksAndTemple/Truck/spp_6
+# export TS_MODULE=/root/volrend/logs/lego/vibrant-sun-8/ts_002000.ts
+# export OPTIONS=../renderer/options/blender.json
+
+export FPS_ONLY=true
 
 cd build
 

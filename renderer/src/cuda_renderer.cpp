@@ -84,6 +84,12 @@ struct VolumeRenderer::Impl {
             glNamedFramebufferDrawBuffers(fb[index], 2, attach_buffers);
         }
 
+#ifdef TIME_RECORD_ENABLED
+        for (int index = 0; index < 2; index++) {
+            ctx[index].timer().reset(stream);
+        }
+#endif
+
         started_ = true;
     }
 
@@ -121,10 +127,23 @@ struct VolumeRenderer::Impl {
         if (tree != nullptr) {
             cuda(GraphicsMapResources(2, &cgr[buf_index * 2], stream));
 
+#ifdef TIME_RECORD_ENABLED
+            ctx[buf_index].timer().render_start();
+#endif
             launch_renderer(*tree, camera, options, ctx[buf_index], stream);
+#ifdef TIME_RECORD_ENABLED
+            ctx[buf_index].timer().render_stop();
+#endif
             if (options.denoise) {
                 denoiser->denoise(camera, ctx[buf_index], stream);
             }
+#ifdef TIME_RECORD_ENABLED
+            ctx[buf_index].timer().record(options.denoise);
+            // ctx[buf_index].timer().report();
+            if (ctx[buf_index].timer().cnt > 1000) {
+                ctx[buf_index].timer().reset(stream);
+            }
+#endif
 
             cuda(GraphicsUnmapResources(2, &cgr[buf_index * 2], stream));
         }

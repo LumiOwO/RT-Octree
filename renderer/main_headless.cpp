@@ -279,10 +279,6 @@ int main(int argc, char *argv[])
     cuda(StreamCreateWithFlags(&stream, cudaStreamDefault));
     cudaArray_t depth_arr = nullptr; // Not using depth buffer
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
     // Prepare render context
     RenderContext ctx;
     ctx.offscreen = true;
@@ -321,28 +317,27 @@ int main(int argc, char *argv[])
         ctx.rng.advance();
     }
 
-#ifdef DEBUG_TIME_RECORD
+#ifdef TIME_RECORD_ENABLED
     ctx.timer().reset(stream);
 #endif
 
     // Begin render
-    cudaEventRecord(start, stream);
     for (size_t i = 0; i < trans.size(); ++i)
     {
         camera.transform = trans[i];
         camera._update(false);
 
-#ifdef DEBUG_TIME_RECORD
+#ifdef TIME_RECORD_ENABLED
         ctx.timer().render_start();
 #endif
         launch_renderer(tree, camera, options, ctx, stream, true);
-#ifdef DEBUG_TIME_RECORD
+#ifdef TIME_RECORD_ENABLED
         ctx.timer().render_stop();
 #endif
         if (options.denoise) {
             denoiser->denoise(camera, ctx, stream);
         }
-#ifdef DEBUG_TIME_RECORD
+#ifdef TIME_RECORD_ENABLED
         ctx.timer().record(options.denoise);
 #endif
 
@@ -385,21 +380,10 @@ int main(int argc, char *argv[])
         }
 
     }
-    cudaEventRecord(stop, stream);
-    cudaEventSynchronize(stop);
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    milliseconds = milliseconds / trans.size();
 
-    printf("%.10f ms per frame\n", milliseconds);
-    printf("%.10f fps\n", 1000.f / milliseconds);
-
-#ifdef DEBUG_TIME_RECORD
+#ifdef TIME_RECORD_ENABLED
     ctx.timer().report();
 #endif
-
-    cuda(EventDestroy(start));
-    cuda(EventDestroy(stop));
 
     ctx.freeResource();
     cuda(FreeArray(array));

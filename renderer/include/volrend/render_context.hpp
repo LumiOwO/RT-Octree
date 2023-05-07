@@ -7,7 +7,7 @@
 #include "pcg32.h"
 #include "volrend/cuda/common.cuh"
 
-#define DEBUG_TIME_RECORD
+#define TIME_RECORD_ENABLED
 
 namespace volrend {
 
@@ -119,7 +119,7 @@ public:
         cudaCreateTextureObject(&noisy_tex_obj, &res_desc, &tex_desc, nullptr);
     }
 
-#ifdef DEBUG_TIME_RECORD
+#ifdef TIME_RECORD_ENABLED
     struct Timer final {
         enum {
             T_RENDER,
@@ -202,6 +202,7 @@ public:
             all += t;
 
             printf("all:    %.10f ms per frame\n", all);
+            printf("FPS:    %.10f\n", 1000.f / all);
         }
     };
 
