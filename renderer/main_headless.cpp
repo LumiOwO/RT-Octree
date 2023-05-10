@@ -30,6 +30,8 @@ namespace fs = std::experimental::filesystem;
 #include "volrend/cuda/renderer_kernel.hpp"
 // clang-format on
 
+#undef VOLREND_DEBUG
+
 using json = nlohmann::json;
 
 namespace
@@ -117,6 +119,8 @@ namespace
         return res;
     }
 
+#ifdef VOLREND_DEBUG
+
     inline void print_mat4x4 (const glm::mat4x4& mat)
     {
         std::cout << "[" << mat[0][0] << "\t" << mat[1][0] << "\t" << mat[2][0] << "\t" << mat[3][0] << "]" << std::endl;
@@ -140,6 +144,8 @@ namespace
         std::cout << "------------------------" << std::endl;
     }
 
+#endif
+
     glm::mat4x3 _viewmatrix (glm::vec3 z, glm::vec3 up, glm::vec3 pos)
     {
         z = _normalize(z);
@@ -154,17 +160,11 @@ namespace
         glm::vec3 z_avg = glm::vec3(0.0), up_avg = glm::vec3(0.0), center_avg = glm::vec3(0.0);
         size_t pose_cnt = trans.size();
 
-        std::cout << pose_cnt << std::endl;
-
         for (const auto& transform : trans)
         {
-            // print_mat4x3(transform);
             glm::vec3 z = glm::vec3(transform[2][0], transform[2][1], transform[2][2]);
             glm::vec3 up = glm::vec3(transform[1][0], transform[1][1], transform[1][2]);
             glm::vec3 center = glm::vec3(transform[3][0], transform[3][1], transform[3][2]);
-            // print_vec3(z);
-            // print_vec3(up);
-            // print_vec3(center);
 
             z_avg = z_avg + z;
             up_avg = up_avg + up;
@@ -388,31 +388,7 @@ int main(int argc, char *argv[])
     } 
     else if (dataset_type == "llff") {
         puts("INFO: Use LLFF camera convention\n");
-
         _recenter_poses(trans);
-
-        for (auto& transform : trans)
-            print_mat4x3(transform);
-
-        // glm::mat4x3 temp;
-        // double x = 0.1, y = 0.1, z = -1.5;
-
-        // temp[0][0] =  0.9919389 ;
-        // temp[0][1] = -0.01454816;
-        // temp[0][2] =  0.12587927;
-        // temp[1][0] = 0.02163634;
-        // temp[1][1] = 0.9982449 ;
-        // temp[1][2] = -0.05512662;
-        // temp[2][0] = -0.12485635;
-        // temp[2][1] =  0.05740581;
-        // temp[2][2] =  0.9905127 ;
-        // temp[3][0] = -0.44468433;
-        // temp[3][1] =  0.20300354;
-        // temp[3][2] =  0.08142612;
-
-        // trans.emplace_back(temp);
-        // basenames.emplace_back("temp");
-
     } 
     else {
         puts("INFO: Use NeRF camera convention\n");
