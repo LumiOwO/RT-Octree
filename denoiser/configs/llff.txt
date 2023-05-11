@@ -1,0 +1,26 @@
+logs_root = ./logs
+exp_name = horns
+data_dir = ./data/nerf_llff_data/horns
+
+dataset_type = llff
+spp = 6
+preload = true
+nx = 9
+ny = 9
+
+use_wandb = true
+i_print = 1
+i_save = 100
+i_test = 100
+save_image = false
+
+lr = 0.0001
+epochs = 2000
+batch_size = 32
+
+in_channels = 8
+mid_channels = 32
+num_layers = 2
+num_branches = 5
+kernel_levels = 4
+loss_fn = smape

@@ -256,3 +256,64 @@ class TanksAndTemplesDataset(DenoiserDataset):
             imgs_gt[s] = imgs_gt_list
            
         return aux_buffers, imgs_in, imgs_gt
+
+
+class LLFFDataset(DenoiserDataset):
+    def load_images(self, args):
+        self.istorch = True
+        aux_buffers = {}
+        imgs_in = {}
+        imgs_gt = {}
+        
+        factor = 4
+        img_dirname = f"images_{factor}" if factor > 1 else "images"
+        img_files = sorted(os.listdir(os.path.join(args.data_dir, img_dirname)))
+
+        img_cnt = len(img_files)
+        llffhold = 8
+        i_test = [i for i in np.arange(img_cnt)][::llffhold]
+        i_train = [i for i in np.arange(img_cnt) if i not in i_test]
+
+
+        for s in ["train", "val", "test"]:
+            if args.task == "test" and s != "test":
+                continue
+            # FIXME: skip val set?
+            if s == "val":
+                continue
+
+            indices = i_train if s == "train" else i_test
+            img_files_s = [img_files[i] for i in indices]
+
+            aux_buffers_list = []
+            imgs_in_list = []
+            imgs_gt_list = []
+            tqdm.write(f"Loading {s} set...")
+            for img_fname in tqdm(img_files_s):
+                name = img_fname.split(".")[0]
+
+                aux_buffer = np.fromfile(
+                    os.path.join(args.data_dir, f"spp_{args.spp}", "buf_" + name + ".bin"), 
+                    dtype=np.float32).reshape((8, 756, 1008)) # [C, H, W]
+                img_gt = imageio.imread(
+                    os.path.join(args.data_dir, img_dirname, img_fname))
+
+                aux_buffer, img_in, img_gt = self.preprocess(aux_buffer, img_gt)
+
+                if s == "train":
+                    aux_buffer, img_in, img_gt = self.slice_imgs(
+                        args.nx, args.ny, aux_buffer, img_in, img_gt)
+                else:
+                    aux_buffer = [aux_buffer]
+                    img_in = [img_in]
+                    img_gt = [img_gt]
+
+                aux_buffers_list.extend(aux_buffer)
+                imgs_in_list.extend(img_in)
+                imgs_gt_list.extend(img_gt)
+
+            aux_buffers[s] = aux_buffers_list
+            imgs_in[s] = imgs_in_list
+            imgs_gt[s] = imgs_gt_list
+           
+        return aux_buffers, imgs_in, imgs_gt

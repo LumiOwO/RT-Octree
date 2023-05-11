@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -245,12 +246,14 @@ int main(int argc, char *argv[])
         fy = fx;
 
     assert(args.unmatched().size() == 1);
+    auto poses_path = fs::path(args.unmatched()[0]);
+
     // Load all transform matrices and intrin
     std::vector<glm::mat4x3> trans;
     std::vector<std::string> basenames;
     std::string dataset_type = args["dataset"].as<std::string>();
     if (dataset_type == "blender") {
-        json  poses          = json::parse(std::ifstream(args.unmatched()[0]));
+        json  poses          = json::parse(std::ifstream(poses_path));
         float camera_angle_x = poses["camera_angle_x"];
         fx = fy      = 0.5f * width / tanf(0.5f * camera_angle_x);
 
@@ -271,14 +274,11 @@ int main(int argc, char *argv[])
         width = 1920;
         height = 1080;
 
-        auto data_path = fs::path(args.unmatched()[0]);
-
         // Load intrin matrix
-        auto intrin_path = data_path / "intrinsics.txt";
+        auto intrin_path = poses_path / ".." / "intrinsics.txt";
         read_intrins(intrin_path.string(), fx, fy);
 
         // Load poses
-        auto poses_path = data_path / "pose";
         for (const auto &entry : fs::directory_iterator(poses_path)) {
             auto path = entry.path();
 
@@ -297,39 +297,31 @@ int main(int argc, char *argv[])
         }
     } else if (dataset_type == "llff") {
         // Read Camera Info
-        auto data_path = fs::path(args.unmatched()[0]);
-        auto npy_data_path = data_path / "poses_bounds.npy";
-        auto colmap_data_path = data_path / "colmap_output.txt";
-        cnpy::NpyArray poses = cnpy::npy_load(npy_data_path);
-
+        cnpy::NpyArray poses = cnpy::npy_load(poses_path);
         size_t pose_cnt = poses.shape[0];
-        size_t pose_info_size = poses.shape[1];
-
-        constexpr int LLFF_param_cnt = 17;
-        assert(pose_info_size == LLFF_param_cnt);
+        size_t LLFF_param_cnt = poses.shape[1];
 
         auto _get_from = [&](int set, int index_in_set) -> float {
             union {
-                float  *ptr_f;
-                double *ptr_d;
+                float*  ptr_f;
+                double* ptr_d;
             };
 
-            bool is_float = (poses.word_size == 4);
-            if (is_float) {
+            bool is_float_ptr = (poses.word_size == 4);
+            if (is_float_ptr) {
                 ptr_f = poses.data<float>();
             } else {
                 assert(poses.word_size == 8);
                 ptr_d = poses.data<double>();
             }
             int idx = set * LLFF_param_cnt + index_in_set;
-            return is_float ? ptr_f[idx] : float(ptr_d[idx]);
+            return is_float_ptr ? ptr_f[idx] : float(ptr_d[idx]);
         };
 
         constexpr int factor = 4;
-        width = _get_from(0, 9) / factor;
-        height = _get_from(0, 4) / factor;
-        fx = _get_from(0, 14) / factor;
-        fy = _get_from(0, 14) / factor;
+        width   = _get_from(0, 9) / factor;
+        height  = _get_from(0, 4) / factor;
+        fx = fy = _get_from(0, 14) / factor;
 
         // Correct rotation matrix
         glm::mat4x4 cam_trans(0, 1, 0, 0,
@@ -337,7 +329,7 @@ int main(int argc, char *argv[])
                               0, 0, 1, 0,
                               0, 0, 0, 1);
         glm::mat4x3 temp;
-        float bds_min = 4096;
+        float bds_min = 1e9f;
         for (int pose_index = 0; pose_index != pose_cnt; ++pose_index)
         {
             float near_clip = _get_from(pose_index, 15);
@@ -361,21 +353,20 @@ int main(int argc, char *argv[])
             trans.emplace_back(temp);
         }
 
-        /*  Read Basenames  */
-        bool is_file = false;
-
-        std::string buf;
-        std::fstream colmap(colmap_data_path);
-        while(colmap >> buf)
-        {
-            if (is_file)
-            {
-                basenames.emplace_back(buf.substr(0, buf.length() - 4));
-                is_file = false;
-            }
-            if (buf == "Name:")
-                is_file = true;
+        // Read Basenames
+        std::string images_dirname = "images";
+        if (factor > 1) {
+            images_dirname += "_";
+            images_dirname += std::to_string(factor);
         }
+        auto images_path = poses_path.parent_path() / images_dirname;
+
+        for (const auto &entry : fs::directory_iterator(images_path)) {
+            auto        path  = entry.path();
+            std::string fname = remove_ext(path.filename().string());
+            basenames.emplace_back(fname);
+        }
+        std::sort(basenames.begin(), basenames.end());
     }
 
     // Transform convention

@@ -4,7 +4,7 @@ import os
 
 from denoiser.utils import seed_everything
 from denoiser.runner import Runner
-from denoiser.dataset import BlenderDataset, TanksAndTemplesDataset
+from denoiser.dataset import BlenderDataset, TanksAndTemplesDataset, LLFFDataset
 
 from denoiser.logger.base_logger import BaseLogger
 from denoiser.logger.wandb_logger import WandbLogger
@@ -44,6 +44,8 @@ def main(args):
         dataset = BlenderDataset(args, device=device)
     elif args.dataset_type == "tt":
         dataset = TanksAndTemplesDataset(args, device=device)
+    elif args.dataset_type == "llff":
+        dataset = LLFFDataset(args, device=device)
     else:
         raise NotImplementedError(f"Invalid dataset type: {args.dataset_type}.")
     logger.print("Dataset loaded.")
