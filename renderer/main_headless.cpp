@@ -102,6 +102,90 @@ namespace
         ifs >> fx >> _ >> _ >> _;
         ifs >> _ >> fy;
     }
+
+    /*  Functions for Loading LLFF Dataset  */
+
+    inline glm::vec3 _normalize(glm::vec3 vec)
+    {
+        float norm = sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
+        return glm::vec3(vec.x / norm, vec.y / norm, vec.z / norm);
+    }
+    
+    inline glm::mat4x4 _expand_4x3_to_4x4(const glm::mat4x3& mat)
+    {
+        glm::mat4x4 res(glm::vec4(mat[0], 0.0f), glm::vec4(mat[1], 0.0f), glm::vec4(mat[2], 0.0f), glm::vec4(mat[3], 1.0f));
+        return res;
+    }
+
+    inline void print_mat4x4(const glm::mat4x4& mat)
+    {
+        std::cout << "[" << mat[0][0] << "\t" << mat[1][0] << "\t" << mat[2][0] << "\t" << mat[3][0] << "]" << std::endl;
+        std::cout << "[" << mat[0][1] << "\t" << mat[1][1] << "\t" << mat[2][1] << "\t" << mat[3][1] << "]" << std::endl;
+        std::cout << "[" << mat[0][2] << "\t" << mat[1][2] << "\t" << mat[2][2] << "\t" << mat[3][2] << "]" << std::endl;
+        std::cout << "[" << mat[0][3] << "\t" << mat[1][3] << "\t" << mat[2][3] << "\t" << mat[3][3] << "]" << std::endl;
+        std::cout << "------------------------" << std::endl;
+    }
+
+    inline void print_mat4x3(const glm::mat4x4& mat)
+    {
+        std::cout << "[" << mat[0][0] << "\t" << mat[1][0] << "\t" << mat[2][0] << "\t" << mat[3][0] << "]" << std::endl;
+        std::cout << "[" << mat[0][1] << "\t" << mat[1][1] << "\t" << mat[2][1] << "\t" << mat[3][1] << "]" << std::endl;
+        std::cout << "[" << mat[0][2] << "\t" << mat[1][2] << "\t" << mat[2][2] << "\t" << mat[3][2] << "]" << std::endl;
+        std::cout << "------------------------" << std::endl;
+    }
+
+    inline void print_vec3(const glm::vec3& vec)
+    {
+        std::cout << "[" << vec.x << "\t" << vec.y << "\t" << vec.z << "]" << std::endl;
+        std::cout << "------------------------" << std::endl;
+    }
+
+    glm::mat4x3 _viewmatrix(glm::vec3 z, glm::vec3 up, glm::vec3 pos)
+    {
+        z = _normalize(z);
+        glm::vec3 x = _normalize(glm::cross(up, z));
+        glm::vec3 y = _normalize(glm::cross(z, x));
+        glm::mat4x3 view_mat = glm::mat4x3(x, y, z, pos);
+        return view_mat;
+    }
+
+    glm::mat4x3 _poses_avg(const std::vector<glm::mat4x3>& trans)
+    {
+        glm::vec3 z_avg = glm::vec3(0.0), up_avg = glm::vec3(0.0), center_avg = glm::vec3(0.0);
+        size_t pose_cnt = trans.size();
+
+        for (const auto& transform : trans)
+        {
+            glm::vec3 z = glm::vec3(transform[2][0], transform[2][1], transform[2][2]);
+            glm::vec3 up = glm::vec3(transform[1][0], transform[1][1], transform[1][2]);
+            glm::vec3 center = glm::vec3(transform[3][0], transform[3][1], transform[3][2]);
+
+            z_avg = z_avg + z;
+            up_avg = up_avg + up;
+            center_avg = center_avg + center;
+        }
+
+        z_avg = _normalize(z_avg / (float)pose_cnt);
+        up_avg = up_avg / (float)pose_cnt;
+        center_avg = center_avg / (float)pose_cnt;
+
+        return _viewmatrix(z_avg, up_avg, center_avg);
+    }
+
+    void _recenter_poses(std::vector<glm::mat4x3>& trans)
+    {
+        glm::mat4x3 poses_avg = _poses_avg(trans);
+        glm::mat4x4 c2w_transform = _expand_4x3_to_4x4(poses_avg);
+        glm::mat4x4 c2w_inverse = glm::inverse(c2w_transform);
+
+        for (auto& pose : trans)
+        {
+            glm::mat4x4 pose4 = _expand_4x3_to_4x4(pose);
+            pose4 = c2w_inverse * pose4;
+            pose = glm::mat4x3(pose4);
+        }
+    }
+    
 } // namespace
 
 int main(int argc, char *argv[])
@@ -211,6 +295,87 @@ int main(int argc, char *argv[])
                 }
             }
         }
+    } else if (dataset_type == "llff") {
+        // Read Camera Info
+        auto data_path = fs::path(args.unmatched()[0]);
+        auto npy_data_path = data_path / "poses_bounds.npy";
+        auto colmap_data_path = data_path / "colmap_output.txt";
+        cnpy::NpyArray poses = cnpy::npy_load(npy_data_path);
+
+        size_t pose_cnt = poses.shape[0];
+        size_t pose_info_size = poses.shape[1];
+
+        constexpr int LLFF_param_cnt = 17;
+        assert(pose_info_size == LLFF_param_cnt);
+
+        auto _get_from = [&](int set, int index_in_set) -> float {
+            union {
+                float  *ptr_f;
+                double *ptr_d;
+            };
+
+            bool is_float = (poses.word_size == 4);
+            if (is_float) {
+                ptr_f = poses.data<float>();
+            } else {
+                assert(poses.word_size == 8);
+                ptr_d = poses.data<double>();
+            }
+            int idx = set * LLFF_param_cnt + index_in_set;
+            return is_float ? ptr_f[idx] : float(ptr_d[idx]);
+        };
+
+        constexpr int factor = 4;
+        width = _get_from(0, 9) / factor;
+        height = _get_from(0, 4) / factor;
+        fx = _get_from(0, 14) / factor;
+        fy = _get_from(0, 14) / factor;
+
+        // Correct rotation matrix
+        glm::mat4x4 cam_trans(0, 1, 0, 0,
+                              -1, 0, 0, 0,
+                              0, 0, 1, 0,
+                              0, 0, 0, 1);
+        glm::mat4x3 temp;
+        float bds_min = 4096;
+        for (int pose_index = 0; pose_index != pose_cnt; ++pose_index)
+        {
+            float near_clip = _get_from(pose_index, 15);
+            if (near_clip < bds_min)
+                bds_min = near_clip;
+        }
+
+        for (int pose_index = 0; pose_index != pose_cnt; ++pose_index)
+        {
+            constexpr int row_step = 5;
+            for (int i = 0; i != 3; ++i)
+                for (int j = 0; j != 4; ++j)
+                    temp[j][i] = _get_from(pose_index, i * row_step + j);
+            temp = temp * cam_trans;
+
+            float scale = 1.0f / (bds_min * 0.75f);
+
+            for (int i = 0; i != 3; ++i)
+                temp[3][i] *= scale;
+
+            trans.emplace_back(temp);
+        }
+
+        /*  Read Basenames  */
+        bool is_file = false;
+
+        std::string buf;
+        std::fstream colmap(colmap_data_path);
+        while(colmap >> buf)
+        {
+            if (is_file)
+            {
+                basenames.emplace_back(buf.substr(0, buf.length() - 4));
+                is_file = false;
+            }
+            if (buf == "Name:")
+                is_file = true;
+        }
     }
 
     // Transform convention
@@ -226,6 +391,9 @@ int main(int argc, char *argv[])
         {
             transform = transform * cam_trans;
         }
+    } else if (dataset_type == "llff") {
+        puts("INFO: Use LLFF camera convention\n");
+        _recenter_poses(trans);
     } else {
         puts("INFO: Use NeRF camera convention\n");
     }
@@ -238,6 +406,13 @@ int main(int argc, char *argv[])
 
     // Load tree
     N3Tree tree(args["file"].as<std::string>());
+    if (dataset_type == "llff") {
+        tree.use_ndc = true;
+        tree.ndc_width = width;
+        tree.ndc_height = height;
+        tree.ndc_focal = fx;
+    }
+
     {
         float scale = args["scale"].as<float>();
         if (scale != 1.f)
@@ -388,4 +563,4 @@ int main(int argc, char *argv[])
     ctx.freeResource();
     cuda(FreeArray(array));
     cuda(StreamDestroy(stream));
-    }
+}
