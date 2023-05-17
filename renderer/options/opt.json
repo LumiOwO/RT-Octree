@@ -1,0 +1,17 @@
+{
+  "background_brightness": 1.0,
+  "denoise": true,
+  "spp": 6,
+  "enable_probe": false,
+  "grid_max_depth": 4,
+  "probe": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "probe_disp_size": 100,
+  "show_grid": false,
+  "sigma_thresh": 0.01,
+  "step_size": 0.0001,
+  "stop_thresh": 0.01
+}

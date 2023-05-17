@@ -109,13 +109,13 @@ template <typename OutputType, int BLOCK_H, int BLOCK_W, int SUPPORT>
 __global__ void applying(
     const int           H,
     const int           W,
-    cudaTextureObject_t img_in_tex,        // [H, W, 4]
-    const float* __restrict__ kernel_map,  // [H, W]
-    const float* __restrict__ weight_map,  // [H, W]
-    OutputType img_out,                    // [H, W, 4]
-    float* __restrict__ rgb_filtered,      // [H, W, 4]
-    float* __restrict__ max_map,           // [H, W]
-    float* __restrict__ inv_kernel_sum     // [H, W]
+    cudaTextureObject_t img_in_tex,          // [H, W, 4]
+    const float* __restrict__ weight_map,    // [H, W]
+    const float* __restrict__ guidance_map,  // [H, W]
+    OutputType img_out,                      // [H, W, 4]
+    float* __restrict__ rgb_filtered,        // [H, W, 4]
+    float* __restrict__ max_map,             // [H, W]
+    float* __restrict__ inv_kernel_sum       // [H, W]
 ) {
     constexpr int SUPPORT2 = SUPPORT * 2;
     constexpr int TILE_H   = BLOCK_H + SUPPORT2;
@@ -131,20 +131,20 @@ __global__ void applying(
     __shared__ float4 rgba_tile[TILE_H][TILE_W];
     __shared__ float  kernel_tile[TILE_H][TILE_W];
 
-#define __LOAD(tile_x, tile_y, image_x, image_y)                   \
-    do {                                                           \
-        int _tx = (tile_x);                                        \
-        int _ty = (tile_y);                                        \
-        int _ix = (image_x);                                       \
-        int _iy = (image_y);                                       \
-        if (_iy >= 0 && _iy < H && _ix >= 0 && _ix < W) {          \
-            rgba_tile[_ty][_tx] =                                  \
-                tex2D<float4>(img_in_tex, _ix + 0.5f, _iy + 0.5f); \
-            kernel_tile[_ty][_tx] = kernel_map[IMAD(_iy, W, _ix)]; \
-        } else {                                                   \
-            rgba_tile[_ty][_tx]   = float4{0, 0, 0, 0};            \
-            kernel_tile[_ty][_tx] = -FLT_MAX;                      \
-        }                                                          \
+#define __LOAD(tile_x, tile_y, image_x, image_y)                     \
+    do {                                                             \
+        int _tx = (tile_x);                                          \
+        int _ty = (tile_y);                                          \
+        int _ix = (image_x);                                         \
+        int _iy = (image_y);                                         \
+        if (_iy >= 0 && _iy < H && _ix >= 0 && _ix < W) {            \
+            rgba_tile[_ty][_tx] =                                    \
+                tex2D<float4>(img_in_tex, _ix + 0.5f, _iy + 0.5f);   \
+            kernel_tile[_ty][_tx] = guidance_map[IMAD(_iy, W, _ix)]; \
+        } else {                                                     \
+            rgba_tile[_ty][_tx]   = float4{0, 0, 0, 0};              \
+            kernel_tile[_ty][_tx] = -FLT_MAX;                        \
+        }                                                            \
     } while (0)
 
     // left-up
@@ -168,25 +168,6 @@ __global__ void applying(
 
     __syncthreads();
 #undef __LOAD
-
-    // if (ix == 0 && iy == 0) {
-    //     printf("%d x %d\n", TILE_H, TILE_W);
-    //     printf("rgba_tile\n");
-    //     for (int i = 0; i < TILE_H; i++) {
-    //         for (int j = 0; j < TILE_W; j++) {
-    //             printf("%.0f ", rgba_tile[i][j].x);
-    //         }
-    //         printf("\n");
-    //     }
-
-    //     printf("kernel_tile\n");
-    //     for (int i = 0; i < TILE_H; i++) {
-    //         for (int j = 0; j < TILE_W; j++) {
-    //             printf("%.0f ", kernel_tile[i][j]);
-    //         }
-    //         printf("\n");
-    //     }
-    // }
 
     // locate
     if (ix >= W || iy >= H) {
@@ -264,24 +245,10 @@ __global__ void grad_weight_accumulate(
     grad_weight[0] = grad_output[0] * rgb_filtered[0] +
                      grad_output[1] * rgb_filtered[1] +
                      grad_output[2] * rgb_filtered[2];
-
-    // grad *= weight_map[0] * (1 - weight_map[0]); // Already softmax!
-    // printf(
-    //     "%d: %f %f %f %f %f %f %f %f %f\n",
-    //     idx,
-    //     grad_output[0],
-    //     grad_output[1],
-    //     grad_output[2],
-    //     rgb_sum_map[0],
-    //     rgb_sum_map[1],
-    //     rgb_sum_map[2],
-    //     weight_map[0],
-    //     (rgb_sum_map[0] + rgb_sum_map[1] + rgb_sum_map[2]) * weight_map[0] * (1 - weight_map[0]),
-    //     grad);
 }
 
 template <typename scalar_t>
-__global__ void grad_kernel_accumulate(
+__global__ void grad_guidance_accumulate(
     const int SIZE,
     const int H,
     const int W,
@@ -290,10 +257,10 @@ __global__ void grad_kernel_accumulate(
     const scalar_t* __restrict__ img_in,          // [H, W, 4]
     const scalar_t* __restrict__ weight_map,      // [H, W]
     const scalar_t* __restrict__ rgb_filtered,    // [H, W, 4]
-    const scalar_t* __restrict__ kernel_map,      // [H, W]
+    const scalar_t* __restrict__ guidance_map,    // [H, W]
     const scalar_t* __restrict__ max_map,         // [H, W]
     const scalar_t* __restrict__ inv_kernel_sum,  // [H, W]
-    scalar_t* grad_kernel                         // [H, W]
+    scalar_t* grad_guidance                       // [H, W]
 ) {
     // locate
     const int K      = 1 + (support << 1);
@@ -316,21 +283,21 @@ __global__ void grad_kernel_accumulate(
     img_in         += neighbor_idx * IMG_CHANNELS;
     weight_map     += pixel_idx;
     rgb_filtered   += pixel_idx * IMG_CHANNELS;
-    kernel_map     += neighbor_idx;
+    guidance_map   += neighbor_idx;
     max_map        += pixel_idx;
     inv_kernel_sum += pixel_idx;
-    grad_kernel    += neighbor_idx;
+    grad_guidance  += neighbor_idx;
     // clang-format on
 
     // accumulate grad
-    const scalar_t& k   = __expf(kernel_map[0] - max_map[0]) * inv_kernel_sum[0];
+    const scalar_t& k   = __expf(guidance_map[0] - max_map[0]) * inv_kernel_sum[0];
     scalar_t        res = 0;
     res += grad_output[0] * (img_in[0] - rgb_filtered[0]);
     res += grad_output[1] * (img_in[1] - rgb_filtered[1]);
     res += grad_output[2] * (img_in[2] - rgb_filtered[2]);
     res *= weight_map[0] * k;
 
-    gpuAtomicAdd(&grad_kernel[0], res);
+    gpuAtomicAdd(&grad_guidance[0], res);
 }
 
 }  // namespace kernel
@@ -344,8 +311,8 @@ __host__ inline void kernel_apply(
     const int           H,
     const int           W,
     cudaTextureObject_t img_in_tex,     // [H, W, 4]
-    const float*        kernel_map,     // [H, W]
     const float*        weight_map,     // [H, W]
+    const float*        guidance_map,   // [H, W]
     OutputType          img_out,        // [H, W, 4]
     float*              rgb_filtered,   // [H, W, 4]
     float*              max_map,        // [H, W]
@@ -364,9 +331,9 @@ __host__ inline void kernel_apply(
     grid_size.y = N_BLOCKS_NEEDED(H, BLOCK_H); /* row */
     grid_size.z = 1;
 
-#define __ARGS_TEMP__                                                         \
-    H, W, img_in_tex, kernel_map, weight_map, img_out, rgb_filtered, max_map, \
-        inv_kernel_sum
+#define __ARGS_TEMP__                                                  \
+    H, W, img_in_tex, weight_map, guidance_map, img_out, rgb_filtered, \
+        max_map, inv_kernel_sum
 
     switch (support) {
         case 1:
@@ -433,19 +400,16 @@ __host__ inline void accumulate_one_level(
     const int           H,
     const int           W,
     const int           L,
-    cudaTextureObject_t img_in_tex,  // [H, W, 4]
-    torch::Tensor       kernel_map,  // [H, W]
-    torch::Tensor       weight_map,  // [H, W]
-    OutputType          img_out,     // [H, W, 4]
+    cudaTextureObject_t img_in_tex,    // [H, W, 4]
+    torch::Tensor       weight_map,    // [H, W]
+    torch::Tensor       guidance_map,  // [H, W]
+    OutputType          img_out,       // [H, W, 4]
 
     // clang-format off
     torch::autograd::variable_list& save,
     const int batch_idx
     // clang-format on
 ) {
-    // auto stream_guard =
-    //     at::cuda::CUDAStreamGuard(stream);
-
     // tensors
     bool need_save      = !save.empty();
     auto rgb_filtered   = torch::Tensor();
@@ -465,8 +429,8 @@ __host__ inline void accumulate_one_level(
         H,
         W,
         img_in_tex,
-        kernel_map.data_ptr<float>(),
         weight_map.data_ptr<float>(),
+        guidance_map.data_ptr<float>(),
         img_out,
         (need_save ? rgb_filtered.data_ptr<float>() : nullptr),
         (need_save ? max_map.data_ptr<float>() : nullptr),
@@ -476,18 +440,18 @@ __host__ inline void accumulate_one_level(
 template <typename OutputType>
 __host__ inline void forward(
     cudaStream_t        stream,
-    torch::Tensor       weight_map,  // [L, H, W]
-    torch::Tensor       kernel_map,  // [L, H, W]
-    cudaTextureObject_t img_in_tex,  // [H, W, 4]
-    OutputType          img_out,     // [H, W, 4]
+    torch::Tensor       weight_map,    // [L, H, W]
+    torch::Tensor       guidance_map,  // [L, H, W]
+    cudaTextureObject_t img_in_tex,    // [H, W, 4]
+    OutputType          img_out,       // [H, W, 4]
     // clang-format off
     torch::autograd::variable_list& save,
     const int batch_idx
     // clang-format on
 ) {
-    const int L = kernel_map.size(0);
-    const int H = kernel_map.size(1);
-    const int W = kernel_map.size(2);
+    const int L = guidance_map.size(0);
+    const int H = guidance_map.size(1);
+    const int W = guidance_map.size(2);
 
     for (int level = 0; level < L; level++) {
         accumulate_one_level<OutputType>(
@@ -497,8 +461,8 @@ __host__ inline void forward(
             W,
             L,
             img_in_tex,
-            kernel_map.index({level}),
             weight_map.index({level}),
+            guidance_map.index({level}),
             img_out,
             save, 
             batch_idx);
@@ -518,9 +482,9 @@ __host__ inline void grad_accumulate_one_level(
     torch::Tensor max_map,         // [H, W]
     torch::Tensor inv_kernel_sum,  // [H, W]
     torch::Tensor weight_map,      // [H, W]
-    torch::Tensor kernel_map,      // [H, W]
+    torch::Tensor guidance_map,    // [H, W]
     torch::Tensor grad_weight,     // [H, W]
-    torch::Tensor grad_kernel      // [H, W]
+    torch::Tensor grad_guidance    // [H, W]
 ) {
     constexpr static const int N_THREADS = 512;
 
@@ -528,7 +492,7 @@ __host__ inline void grad_accumulate_one_level(
     const int grad_weight_blocks = N_BLOCKS_NEEDED(SIZE, N_THREADS);
     // clang-format off
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-            grad_kernel.type(), "backward_grad_weight", ([&] {
+            grad_guidance.type(), "backward_grad_weight", ([&] {
                 kernel::grad_weight_accumulate<scalar_t>
                     <<<grad_weight_blocks, N_THREADS, 0, stream>>>(
                         SIZE,
@@ -545,12 +509,12 @@ __host__ inline void grad_accumulate_one_level(
     const int K_SIZE  = K * K;
 
     // compute kernel grads
-    const int grad_kernel_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
+    const int grad_guidance_blocks = N_BLOCKS_NEEDED(SIZE * K_SIZE, N_THREADS);
     // clang-format off
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-            grad_kernel.type(), "backward_grad_kernel", ([&] {
-                kernel::grad_kernel_accumulate<scalar_t>
-                    <<<grad_kernel_blocks, N_THREADS, 0, stream>>>(
+            grad_guidance.type(), "backward_grad_guidance", ([&] {
+                kernel::grad_guidance_accumulate<scalar_t>
+                    <<<grad_guidance_blocks, N_THREADS, 0, stream>>>(
                         SIZE,
                         H,
                         W,
@@ -559,22 +523,22 @@ __host__ inline void grad_accumulate_one_level(
                         img_in.data_ptr<scalar_t>(),
                         weight_map.data_ptr<scalar_t>(),
                         rgb_filtered.data_ptr<scalar_t>(),
-                        kernel_map.data_ptr<scalar_t>(),
+                        guidance_map.data_ptr<scalar_t>(),
                         max_map.data_ptr<scalar_t>(),
                         inv_kernel_sum.data_ptr<scalar_t>(),
-                        grad_kernel.data_ptr<scalar_t>());
+                        grad_guidance.data_ptr<scalar_t>());
             }));
     // clang-format on
 }
 
 __host__ inline void backward(
     cudaStream_t  stream,
-    torch::Tensor grad_output,  // [H, W, 4]
-    torch::Tensor img_in,       // [H, W, 4]
-    torch::Tensor weight_map,   // [L, H, W]
-    torch::Tensor kernel_map,   // [L, H, W]
-    torch::Tensor grad_weight,  // [L, H, W]
-    torch::Tensor grad_kernel,  // [L, H, W]
+    torch::Tensor grad_output,    // [H, W, 4]
+    torch::Tensor img_in,         // [H, W, 4]
+    torch::Tensor weight_map,     // [L, H, W]
+    torch::Tensor guidance_map,   // [L, H, W]
+    torch::Tensor grad_weight,    // [L, H, W]
+    torch::Tensor grad_guidance,  // [L, H, W]
     // clang-format off
     torch::autograd::variable_list& saved,
     const int batch_idx
@@ -582,9 +546,9 @@ __host__ inline void backward(
 ) {
 
     // get dimensions
-    const int L    = kernel_map.size(0);
-    const int H    = kernel_map.size(1);
-    const int W    = kernel_map.size(2);
+    const int L    = guidance_map.size(0);
+    const int H    = guidance_map.size(1);
+    const int W    = guidance_map.size(2);
     const int SIZE = H * W;
 
     // accumulate grads for each level
@@ -604,9 +568,9 @@ __host__ inline void backward(
             saved[saved_idx + 1].index({batch_idx}),  // max_map
             saved[saved_idx + 2].index({batch_idx}),  // inv_kernel_sum
             weight_map.index({level}),                // weight_map
-            kernel_map.index({level}),                // kernel_map
+            guidance_map.index({level}),              // guidance_map
             grad_weight.index({level}),               // grad_weight
-            grad_kernel.index({level})                // grad_kernel
+            grad_guidance.index({level})              // grad_guidance
         );
     }
 }
@@ -620,15 +584,15 @@ public:
         // clang-format off
         torch::autograd::AutogradContext* ctx,
         // clang-format on
-        torch::Tensor weight_map,  // [B, L, H, W]
-        torch::Tensor kernel_map,  // [B, L, H, W]
-        torch::Tensor img_in,      // [B, H, W, 4]
+        torch::Tensor weight_map,    // [B, L, H, W]
+        torch::Tensor guidance_map,  // [B, L, H, W]
+        torch::Tensor img_in,        // [B, H, W, 4]
         bool          requires_grad) {
 
-        const int B = kernel_map.size(0);
-        const int L = kernel_map.size(1);
-        const int H = kernel_map.size(2);
-        const int W = kernel_map.size(3);
+        const int B = guidance_map.size(0);
+        const int L = guidance_map.size(1);
+        const int H = guidance_map.size(2);
+        const int W = guidance_map.size(3);
 
         // variables to save
         auto save = torch::autograd::variable_list{};
@@ -636,7 +600,7 @@ public:
             // std::cout << "save context" << std::endl;
             save.resize(SAVED_INPUTS_CNT + L * SAVED_PER_LEVEL_CNT);
             save[0] = weight_map;
-            save[1] = kernel_map;
+            save[1] = guidance_map;
             save[2] = img_in;
 
             auto options = torch::TensorOptions()
@@ -676,7 +640,7 @@ public:
             host::forward<float*>(
                 stream,
                 weight_map.index({i}),
-                kernel_map.index({i}),
+                guidance_map.index({i}),
                 img_in_tex,
                 img_out.index({i}).data_ptr<float>(),
                 save,
@@ -697,18 +661,18 @@ public:
     static torch::autograd::tensor_list backward(
         torch::autograd::AutogradContext* ctx,
         torch::autograd::tensor_list      grad_outputs) {
-        auto saved       = ctx->get_saved_variables();
-        auto weight_map  = saved[0];                      // [B, L, H, W]
-        auto kernel_map  = saved[1];                      // [B, L, H, W]
-        auto img_in      = saved[2];                      // [B, H, W, 4]
-        auto grad_output = grad_outputs[0].contiguous();  // [B, H, W, 4]
+        auto saved        = ctx->get_saved_variables();
+        auto weight_map   = saved[0];                      // [B, L, H, W]
+        auto guidance_map = saved[1];                      // [B, L, H, W]
+        auto img_in       = saved[2];                      // [B, H, W, 4]
+        auto grad_output  = grad_outputs[0].contiguous();  // [B, H, W, 4]
 
         // get dimensions
-        const int B    = kernel_map.size(0);
+        const int B = guidance_map.size(0);
 
         // create buffer
-        auto grad_weight = torch::zeros_like(weight_map);  // [B, L, H, W]
-        auto grad_kernel = torch::zeros_like(kernel_map);  // [B, L, H, W]
+        auto grad_weight   = torch::zeros_like(weight_map);    // [B, L, H, W]
+        auto grad_guidance = torch::zeros_like(guidance_map);  // [B, L, H, W]
         // std::cout << "grad_input" << grad_input << std::endl;
 
         cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -718,16 +682,16 @@ public:
                 grad_output.index({i}),
                 img_in.index({i}),
                 weight_map.index({i}),
-                kernel_map.index({i}),
+                guidance_map.index({i}),
                 grad_weight.index({i}),
-                grad_kernel.index({i}),
+                grad_guidance.index({i}),
                 saved,
                 i);
         }
 
         return {
             grad_weight,
-            grad_kernel,
+            grad_guidance,
             torch::Tensor(),
             torch::Tensor(),
         };
@@ -736,16 +700,16 @@ public:
 
 void filtering(
     cudaStream_t        stream,
-    torch::Tensor       weight_map,  // [L, H, W]
-    torch::Tensor       kernel_map,  // [L, H, W]
-    cudaTextureObject_t img_in,      // [H, W, 4]
-    cudaSurfaceObject_t img_out      // [H, W, 4]
-){
+    torch::Tensor       weight_map,    // [L, H, W]
+    torch::Tensor       guidance_map,  // [L, H, W]
+    cudaTextureObject_t img_in,        // [H, W, 4]
+    cudaSurfaceObject_t img_out        // [H, W, 4]
+) {
     auto empty = torch::autograd::variable_list{};
     host::forward<cudaSurfaceObject_t>(
         stream,
         weight_map,
-        kernel_map,
+        guidance_map,
         img_in,
         img_out,
         empty,
@@ -753,11 +717,11 @@ void filtering(
 }
 
 torch::Tensor filtering_autograd(
-    torch::Tensor weight_map,  // [B, L, H, W]
-    torch::Tensor kernel_map,  // [B, L, H, W]
-    torch::Tensor img_in,      // [B, H, W, 4]
+    torch::Tensor weight_map,    // [B, L, H, W]
+    torch::Tensor guidance_map,  // [B, L, H, W]
+    torch::Tensor img_in,        // [B, H, W, 4]
     bool          requires_grad) {
-    return Filtering::apply(weight_map, kernel_map, img_in, requires_grad);
+    return Filtering::apply(weight_map, guidance_map, img_in, requires_grad);
 }
 
 }  // namespace denoiser

@@ -20,8 +20,6 @@ class Runner(object):
                 lr=self.args.lr, betas=(0.9, 0.999), weight_decay=5e-4)
         self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.LambdaLR(
                 optimizer, lambda epoch: 0.1 ** min(epoch / (self.args.epochs + 1), 1))
-        # self.scheduler_fn = lambda optimizer: torch.optim.lr_scheduler.StepLR(
-        #         optimizer, step_size=30, gamma=0.1)
         self.loss_fn = get_loss_fn(args.loss_fn, device)
 
         # Metrics
@@ -29,8 +27,7 @@ class Runner(object):
             self.metrics = [
                 PSNRMetric(), 
                 SSIMMetric(), 
-                LPIPSMetric("alex", device), 
-                LPIPSMetric("vgg", device),
+                LPIPSMetric(device=device), 
             ]
 
         self.epoch = 0
@@ -133,26 +130,7 @@ class Runner(object):
             save_dir = os.path.join(self.args.work_dir, save_dirname)
             os.makedirs(save_dir, exist_ok=True)
 
-        # Test full model
-        for m in self.metrics:
-            m.reset()
-        avg_loss = 0
-        for batch_idx, (aux_buffer, img_in, img_gt) in enumerate(tqdm(dataloader)):
-            # B == 1 in test
-            img_out = model.filtering(aux_buffer, img_in)
-
-            loss = self.loss_fn(img_out[..., :3], img_gt[..., :3])
-            avg_loss += loss.item()
-            for m in self.metrics:
-                m.measure(img_out[..., :3], img_gt[..., :3])
-
-        avg_loss = avg_loss / len(dataloader)
-        full_model_log = {
-            "test/loss": avg_loss,
-            **{f"test/{m.name()}": m.result() for m in self.metrics}
-        }
-
-        # Test compact model
+        # Compact model & test
         ts_module = self.compact(model, load_ckpt=False, filename="")
         for m in self.metrics:
             m.reset()
@@ -172,13 +150,12 @@ class Runner(object):
 
         avg_loss = avg_loss / len(dataloader)
         compact_model_log = {
-            "test/loss_compact": avg_loss,
-            **{f"test/{m.name()}_compact": m.result() for m in self.metrics}
+            "test/loss": avg_loss,
+            **{f"test/{m.name()}": m.result() for m in self.metrics}
         }
 
         self.logger.log({
             "epoch": self.epoch,
-            **full_model_log,
             **compact_model_log,
         })
 

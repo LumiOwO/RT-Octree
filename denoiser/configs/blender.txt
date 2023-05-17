@@ -1,6 +1,6 @@
 logs_root = ./logs
-exp_name = ship
-data_dir = ./data/nerf_synthetic/ship
+exp_name = lego
+data_dir = ./data/nerf_synthetic/lego
 
 dataset_type = blender
 spp = 6
@@ -8,11 +8,11 @@ preload = true
 nx = 10
 ny = 10
 
-use_wandb = true
+use_wandb = false
 i_print = 1
 i_save = 100
 i_test = 100
-save_image = false
+save_image = true
 
 lr = 0.0001
 epochs = 2000

@@ -464,11 +464,6 @@ int main(int argc, char *argv[])
         options = j_options;
     } else {
         options = internal::render_options_from_args(args);
-        //  options.denoise = false;
-        //  options.spp = 4;
-        //  std::ofstream o(args["file"].as<std::string>() + "pretty.json");
-        //  json j = options;
-        //  o << std::setw(2) << j << std::endl;
     }
 
     // Warm up

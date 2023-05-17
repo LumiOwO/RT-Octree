@@ -79,12 +79,11 @@ class SSIMMetric(Metric):
         return ssim(preds, truths, data_range=self.data_range).item()
 
 class LPIPSMetric(Metric):
-    def __init__(self, net, device):
-        self.net = net
-        self.loss_fn = lpips.LPIPS(net=net).eval().to(device)
+    def __init__(self, device):
+        self.loss_fn = lpips.LPIPS(net="alex").eval().to(device)
 
     def name(self):
-        return f"lpips_{self.net}"
+        return f"lpips"
 
     def fn(self, preds, truths):
         return self.loss_fn(preds, truths).item()

@@ -121,25 +121,6 @@ class DenoiserDataset():
                 img_in_chunks.append(img_in_chunk)
                 aux_buffer_chunks.append(aux_buffer_chunk)
 
-        if False:
-            # temp1 = torch.stack([torch.from_numpy(x) for x in [img_in]])
-            # print(temp1.shape)
-            # torchvision.utils.save_image(temp1.permute(0, 3, 1, 2), 
-            #     os.path.join(self.args.work_dir, "temp1.png"), nrow=10)
-            temp2 = torch.stack([torch.from_numpy(x) for x in img_gt_chunks])
-            print(temp2.shape)
-            torchvision.utils.save_image(temp2.permute(0, 3, 1, 2), 
-                os.path.join(self.args.work_dir, "temp2.png"), nrow=10)
-            temp3 = torch.stack([torch.from_numpy(x[:4, ...]) for x in aux_buffer_chunks])
-            print(temp3.shape)
-            torchvision.utils.save_image(temp3, 
-                os.path.join(self.args.work_dir, "temp3.png"), nrow=10)
-            temp4 = torch.stack([torch.from_numpy(x) for x in img_in_chunks])
-            print(temp4.shape)
-            torchvision.utils.save_image(temp4.permute(0, 3, 1, 2), 
-                os.path.join(self.args.work_dir, "temp4.png"), nrow=10)
-            exit(1)
-
         return aux_buffer_chunks, img_in_chunks, img_gt_chunks
 
     def dataloader(self, task):

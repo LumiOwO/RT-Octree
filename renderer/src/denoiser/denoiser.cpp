@@ -43,11 +43,9 @@ public:
             ctx.aux_buffer, {1, RenderContext::CHANNELS, H, W}, tensor_options);
 
         // kernel prediction
-        //auto weight_map = torch::ones({L, H, W}, tensor_options) / L;
-        //auto kernel_map = torch::rand({L, H, W}, tensor_options);
         auto maps = ts_module.forward({aux_buffer}).toTuple()->elements();
         torch::Tensor weight_map = maps[0].toTensor().squeeze(0); // [L, H, W]
-        torch::Tensor kernel_map = maps[1].toTensor().squeeze(0); // [L, H, W]
+        torch::Tensor guidance_map = maps[1].toTensor().squeeze(0); // [L, H, W]
 
 #ifdef TIME_RECORD_ENABLED
         ctx.timer().torch_stop();
@@ -55,7 +53,7 @@ public:
 #endif
         // kernel applying
         denoiser::filtering(
-            stream, weight_map, kernel_map, ctx.noisy_tex_obj, ctx.surf_obj);
+            stream, weight_map, guidance_map, ctx.noisy_tex_obj, ctx.surf_obj);
 
 #ifdef TIME_RECORD_ENABLED
         ctx.timer().filter_stop();

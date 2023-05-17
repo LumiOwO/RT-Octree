@@ -4,9 +4,6 @@ import torch.nn.functional as F
 
 import os
 
-# import tensorrt 
-# import torch_tensorrt
-
 try:
     import _denoiser
 except ImportError:
@@ -79,11 +76,11 @@ class RepVGGBlock(nn.Module):
 
 def filtering(model, aux_buffer, img_in, requires_grad=False):
     # aux_buffer [B, C, H, W]
-    weight_map, kernel_map = model(aux_buffer)
+    weight_map, guidance_map = model(aux_buffer)
 
     # kernel reconstruction and apply
     img_out = _denoiser.filtering_autograd(
-        weight_map, kernel_map, img_in, requires_grad=requires_grad)
+        weight_map, guidance_map, img_in, requires_grad=requires_grad)
     return img_out
 
 class GuidanceNet(nn.Module):
@@ -117,8 +114,8 @@ class GuidanceNet(nn.Module):
         weight_map = x[:, :self.kernel_levels, ...].contiguous() # [B, L, H, W]
         weight_map = F.softmax(weight_map, dim=1)
 
-        kernel_map = x[:, self.kernel_levels:, ...].contiguous() # [B, L, H, W]
-        return weight_map, kernel_map
+        guidance_map = x[:, self.kernel_levels:, ...].contiguous() # [B, L, H, W]
+        return weight_map, guidance_map
 
     def filtering(self, aux_buffer, img_in, requires_grad=False):
         return filtering(self, aux_buffer, img_in, requires_grad)
@@ -173,7 +170,6 @@ class GuidanceNetCompact(GuidanceNet):
 def compact_and_compile(model: GuidanceNet, device=None):
     # Compact
     model = model.eval().cpu()
-    # model = GuidanceNet(in_channels=8, mid_channels=16, num_branches=5, num_layers=2, kernel_levels=6)
     compact = GuidanceNetCompact(model).eval()
 
     model = model.to(device)
@@ -201,29 +197,13 @@ def compact_and_compile(model: GuidanceNet, device=None):
         return compact.forward(aux_buffer)
 
     torch._C._jit_set_profiling_mode(False)
-    # guidance_net_ts = torch.jit.script(compact)
     with torch.no_grad():
         guidance_net_ts = torch.jit.trace(cast_and_forward, (aux_buffer))
-    # guidance_net_ts = torch.jit.optimize_for_inference(guidance_net_ts)
-    # print(guidance_net_ts.code)
     
     if profile:
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
             with torch.no_grad():
                 out1, out2 = guidance_net_ts(aux_buffer)
         print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
-
-    # trt_guidance_net_ts = torch_tensorrt.compile(
-    #     guidance_net_ts, 
-    #     inputs=[torch_tensorrt.Input(aux_buffer.shape, dtype=aux_buffer.dtype)],
-    #     enabled_precisions={torch.float16},
-    # )
-    # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-    #     with torch.no_grad():
-    #         out1_trt, out2_trt = trt_guidance_net_ts(aux_buffer)
-    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
-
-    # print((out1_trt - out1).max())
-    # print((out2_trt - out2).max())
 
     return guidance_net_ts
