@@ -32,11 +32,9 @@ https://download.pytorch.org/libtorch/cu113/libtorch-win-shared-with-deps-1.11.0
 ## Data
 For inference, we use pretrained PlenOctree models download from [here](https://drive.google.com/drive/folders/1oUxS1Why1NaCd-ioPR3UCbCLYpfrOacm). 
 
-For training our GuidanceNet, **NeRF-Synthetic dataset** ([Download Link](https://drive.google.com/drive/folders/128yBriW1IG_3NJ5Rp7APSTZsJqdJdfc1))  and **TanksAndTemple dataset** ([Download Link](https://dl.fbaipublicfiles.com/nsvf/dataset/TanksAndTemple.zip)) are used.
-The noisy input of these datasets can be rendered by disable the denoiser in renderer.
+For training our GuidanceNet, **NeRF-Synthetic dataset** ([Download Link](https://drive.google.com/drive/folders/128yBriW1IG_3NJ5Rp7APSTZsJqdJdfc1))  and **TanksAndTemple dataset** ([Download Link](https://dl.fbaipublicfiles.com/nsvf/dataset/TanksAndTemple.zip)) are used. The noisy input of these datasets can be rendered by disable the denoiser in renderer.
 
-(TODO) Provide preprocessed dataset
-
+We also provide a preprocessed noisy dataset and trained model for each scene using `SPP=6` ([Download Link](https://sjtueducn-my.sharepoint.com/:f:/g/personal/zixi_shu_sjtu_edu_cn/ErlevBCwkRxKnVf_W49JD2kBnn2XtGQcCocsMid2wdBqxQ?e=2DTbv3))
 ## Renderer
 
 ### Build
