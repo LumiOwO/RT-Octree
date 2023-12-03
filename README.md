@@ -1,5 +1,7 @@
 # RT-Octree: Accelerate PlenOctree Rendering with Batched Regular Tracking and Neural Denoising for Real-time Neural Radiance Fields
 
+### [Project page](https://rt-octree.github.io/) | [Paper](https://doi.org/10.1145/3610548.3618214) | [arXiv](https://sjtueducn-my.sharepoint.com/:b:/g/personal/zixi_shu_sjtu_edu_cn/ET3l-8pHzuhEjcPAZwYXjcwBbCRjU13Zs0Dlw0NS325M3A?e=FmSzcI) 
+
 
 ## Environment (Tested)
 - Ubuntu 20.04
