@@ -1,6 +1,6 @@
-# RT-Octree: Accelerate PlenOctree Rendering with Batched Regular Tracking and Neural Denoising for Real-time Neural Radiance Fields
+# RT-Octree: Accelerate PlenOctree Rendering with Batched Regular Tracking and Neural Denoising for Real-time Neural Radiance Fields (SIGGRAPH Asia 2023)
 
-### [Project page](https://rt-octree.github.io/) | [Paper](https://doi.org/10.1145/3610548.3618214) | [arXiv](https://sjtueducn-my.sharepoint.com/:b:/g/personal/zixi_shu_sjtu_edu_cn/ET3l-8pHzuhEjcPAZwYXjcwBbCRjU13Zs0Dlw0NS325M3A?e=FmSzcI) 
+### [Project page](https://rt-octree.github.io/) | [Paper](https://doi.org/10.1145/3610548.3618214) | [arXiv](https://sjtueducn-my.sharepoint.com/:b:/g/personal/zixi_shu_sjtu_edu_cn/Eam50UugV1tJkwXKPFkbfF0BjN8p7KaACOGOQGJeb_INGw?e=ltDCyd) 
 
 
 ## Environment (Tested)
@@ -99,3 +99,16 @@ After training, the trained model will be saved as torchscript module to `ts_<ep
 ## Reference
 - Our initial code was borrowed from [PlenOctree Renderer](https://github.com/sxyu/volrend)
 
+## Citation
+
+If you find this code helpful for your research, please cite:
+
+```
+@inproceedings{shu2023rtoctree,
+  title={RT-Octree: Accelerate PlenOctree Rendering with Batched Regular Tracking and Neural Denoising for Real-time Neural Radiance Fields},
+  author={Shu, Zixi and Yi, Ran and Meng, Yuqi and Wu, Yutong and Ma, Lizhuang},
+  booktitle={SIGGRAPH Asia 2023 Conference Papers},
+  pages={1--11},
+  year={2023}
+}
+```
