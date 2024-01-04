@@ -40,12 +40,20 @@ We also provide a preprocessed noisy dataset and trained model for each scene us
 ## Renderer
 
 ### Build
+#### Linux
 ```bash
 mkdir build
 cd build
 cmake ../renderer
 make -j12
 ```
+#### Windows
+```bash
+mkdir build
+cd build
+cmake ../renderer
+```
+Then find the `.sln` file in the `build` directory and use Visual Studio to build the project.
 
 ### Run
 Use `volrend_headless` to perform offscreen rendering. Here is an example.
