@@ -297,7 +297,7 @@ int main(int argc, char *argv[])
         }
     } else if (dataset_type == "llff") {
         // Read Camera Info
-        cnpy::NpyArray poses = cnpy::npy_load(poses_path);
+        cnpy::NpyArray poses = cnpy::npy_load(poses_path.string());
         size_t pose_cnt = poses.shape[0];
         size_t LLFF_param_cnt = poses.shape[1];
 

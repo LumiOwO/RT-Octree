@@ -75,7 +75,7 @@ For Tanks and Temples dataset, `POSES` is point to the directory containing `*.t
 
 You can also run an ImGui window using `volrend`, for example:
 ```bash
-./volrend ../data/nerf_synthetic/$SCENE/tree.npz
+./volrend $TREE --ts_module=$TS_MODULE
 ```
 
 ## GuidanceNet Training
